@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-25-1352";
+var REVISION = "genuine-u8-rw-26-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -1494,15 +1494,15 @@ function reportComposition() {
         if (!testRun) {
             testRun = true;
             if (RUN_JAILBREAK) {
-                mark("JAILBREAK-GATE", "explicitly-enabled-by-url-param");
-                var kbStart = parseInt(Q.get("kbdelay") || "500", 10);
-                if (!isFinite(kbStart)) kbStart = 500;
-                kbStart = Math.max(0, Math.min(10000, kbStart));
-                setTimeout(scheduleKernelJailbreak, kbStart);
+                releasePreJailbreakMemory();
+                mark("JAILBREAK-GATE", "kernel-stub-disabled-use-kexploit-html");
+                mark("HALT-NOTE", "open-kexploit.html-for-poops-kexploit-kbase-leak");
+                setStatus("halted", "R/W PASS — use kexploit.html", "mansoor ?jb=1 stub removed");
+                maybeAutoSave();
             } else {
                 releasePreJailbreakMemory();
                 mark("HALTED-BEFORE-JAILBREAK", "rw-primitive-ready-no-kernel-writes-performed");
-                mark("HALT-NOTE", "append-?jb=1-to-url-to-run-kernel-jailbreak");
+                mark("HALT-NOTE", "kexploit.html-for-kernel-chain-jb-html-userland-only");
                 setStatus("halted", "R/W PASS — HALTED", "kernel jailbreak skipped (add ?jb=1 to run)");
                 maybeAutoSave();
             }
