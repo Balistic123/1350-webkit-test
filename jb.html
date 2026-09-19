@@ -526,7 +526,7 @@ var SURVIVE_MS = (function(){
 })();
 var FORCE_UCRED_SIG_SCAN = Q.get("ksig") === "1";
 
-var REVISION = "genuine-u8-rw-23-1352";
+var REVISION = "genuine-u8-rw-24-1352";
 var K = 2;
 var DUPLICATE_INDEX = 2;
 var CONTROL_INDEX = 0xffff;
@@ -823,7 +823,12 @@ function userlandKptrScanRanges() {
         var hi2 = BigInt(Math.floor(hostAddress + Number(half)));
         spans.push({ lo: lo2, hi: hi2, tag: "host-anchor" });
     }
-    spans.push({ lo: 0x60000000n, hi: 0xc0000000n, tag: "user-lib-window" });
+    var skipLib = Q.get("kbscanlib") !== "1";
+    if (Q.get("kbskiplib") === "0") skipLib = false;
+    if (Q.get("kbskiplib") === "1") skipLib = true;
+    if (!skipLib) {
+        spans.push({ lo: 0x60000000n, hi: 0xc0000000n, tag: "user-lib-window" });
+    }
     return spans;
 }
 
@@ -841,7 +846,8 @@ function findKbaseViaUserlandKptrAsync(done) {
     var cur = 0n;
     var dbgMode = Q.get("dbg") === "1";
 
-    mark("KPTR-SCAN-BEGIN", "ranges=" + ranges.length + "-step=" + hex(step));
+    var libNote = Q.get("kbscanlib") === "1" ? "lib-on" : "lib-skipped";
+    mark("KPTR-SCAN-BEGIN", "ranges=" + ranges.length + "-step=" + hex(step) + "-" + libNote);
 
     function recordKptr(k) {
         kptrHits++;
